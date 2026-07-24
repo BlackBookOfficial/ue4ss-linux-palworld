@@ -1,0 +1,38 @@
+[package]
+name = "patternsleuth_cli"
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "patternsleuth"
+path = "src/main.rs"
+
+[dependencies]
+patternsleuth = { path = "../patternsleuth", features = ["process-external", "symbols", "serde-resolvers", "image-pe", "image-elf", "minidump"] }
+anyhow = { workspace = true }
+clap = { workspace = true }
+colored = { workspace = true }
+globset = { workspace = true }
+iced-x86 = { workspace = true }
+itertools = { workspace = true }
+memchr = { workspace = true }
+msvc-demangler = { workspace = true }
+object = { workspace = true }
+pdb = { workspace = true }
+prettytable-rs = { workspace = true }
+rayon.workspace = true
+regex = { workspace = true }
+strum = { workspace = true }
+indicatif = { version = "0.17.7", features = ["rayon"] }
+rusqlite = { version = "0.30.0", features = ["bundled"] }
+crossbeam = "0.8.4"
+patricia_tree = "0.8.0"
+libc = "0.2.152"
+serde = { workspace = true, features = ["rc"] }
+serde_json = "1.0.111"
+time = { version = "0.3.31", features = ["formatting", "macros", "local-offset"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing = "0.1.40"

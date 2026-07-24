@@ -1,0 +1,559 @@
+#include <ctime>
+#include <format>
+#include <string>
+#include <utility>
+
+#include <Constructs/Views/EnumerateView.hpp>
+#include <DynamicOutput/DynamicOutput.hpp>
+#include <File/File.hpp>
+#include <File/Macros.hpp>
+#include <GUI/Dumpers.hpp>
+#include <USMapGenerator/Generator.hpp>
+#include <FlagsStringifier.hpp>
+#ifdef TEXT
+#undef TEXT
+#endif
+#include <SDKGenerator/TMapOverrideGen.hpp>
+#include <UE4SSProgram.hpp>
+#include <Unreal/AActor.hpp>
+#include <Unreal/NameTypes.hpp>
+#include <Unreal/Searcher/ObjectSearcher.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
+#include <Unreal/UnrealInitializer.hpp>
+#include <chrono>
+#include <imgui.h>
+#include <glaze/glaze.hpp>
+
+namespace RC::GUI::Dumpers
+{
+    using namespace ::RC::Unreal;
+
+    // TODO: Move these structs (and the enum) to a proper place in the Unreal module.
+    //       They need to be controlled by the engine version select or before 2.0 releases.
+
+    // In KH3, there's an extra float either at the end of FMeshUVChannelInfo or at the end of FStaticMaterial, I can't tell which one.
+    enum
+    {
+        MAX_TEXCOORDS = 4,
+        MAX_STATIC_TEXCOORDS = 8
+    };
+    struct FMeshUVChannelInfo
+    {
+        bool bInitialized;
+
+        /** Whether this values was set manually or is auto generated. */
+        bool bOverrideDensities;
+
+        /**
+         * The UV density in the mesh, before any transform scaling, in world unit per UV.
+         * This value represents the length taken to cover a full UV unit.
+         */
+        float LocalUVDensities[MAX_TEXCOORDS];
+    };
+
+    struct FStaticMaterial_419AndBelow
+    {
+        using UMaterialInterface = ::RC::Unreal::UObject;
+        UMaterialInterface* MaterialInterface;
+
+        /*This name should be use by the gameplay to avoid error if the skeletal mesh Materials array topology change*/
+        FName MaterialSlotName;
+
+        /** Data used for texture streaming relative to each UV channels. */
+        FMeshUVChannelInfo UVChannelData;
+    };
+
+    struct FStaticMaterial_420AndAbove
+    {
+        using UMaterialInterface = ::RC::Unreal::UObject;
+        UMaterialInterface* MaterialInterface;
+
+        /*This name should be use by the gameplay to avoid error if the skeletal mesh Materials array topology change*/
+        FName MaterialSlotName;
+
+        /*This name should be use when we re-import a skeletal mesh so we can order the Materials array like it should be*/
+        FName ImportedMaterialSlotName;
+
+        /** Data used for texture streaming relative to each UV channels. */
+        FMeshUVChannelInfo UVChannelData;
+    };
+
+    auto generate_root_component_csv(UObject* root_component) -> StringType
+    {
+        StringType root_actor_buffer{};
+
+        static auto location_property = root_component->GetPropertyByNameInChain(FromCharTypePtr<TCHAR>(STR("RelativeLocation")));
+        static auto rotation_property = root_component->GetPropertyByNameInChain(FromCharTypePtr<TCHAR>(STR("RelativeRotation")));
+        static auto scale_property = root_component->GetPropertyByNameInChain(FromCharTypePtr<TCHAR>(STR("RelativeScale3D")));
+
+        auto location = root_component->GetValuePtrByPropertyNameInChain<FVector>(FromCharTypePtr<TCHAR>(STR("RelativeLocation")));
+        FString location_string{};
+        location_property->ExportTextItem(location_string, location, nullptr, nullptr, 0);
+        root_actor_buffer.append(fmt::format(STR("\"{}\","), *location_string));
+
+        auto rotation = root_component->GetValuePtrByPropertyNameInChain<FRotator>(FromCharTypePtr<TCHAR>(STR("RelativeRotation")));
+        FString rotation_string{};
+        rotation_property->ExportTextItem(rotation_string, rotation, nullptr, nullptr, 0);
+        root_actor_buffer.append(fmt::format(STR("\"{}\","), *rotation_string));
+
+        auto scale = root_component->GetValuePtrByPropertyNameInChain<FVector>(FromCharTypePtr<TCHAR>(STR("RelativeScale3D")));
+        FString scale_string{};
+        scale_property->ExportTextItem(scale_string, scale, nullptr, nullptr, 0);
+        root_actor_buffer.append(fmt::format(STR("\"{}\","), *scale_string));
+
+        return root_actor_buffer;
+    }
+
+    static auto generate_actors_csv_file(UClass* dump_actor_class) -> StringType
+    {
+        StringType file_buffer{};
+
+        file_buffer.append(STR("---,Actor,Location,Rotation,Scale,Meshes\n"));
+
+        size_t actor_count{};
+        FindObjectSearcher(dump_actor_class, AnySuperStruct::StaticClass()).ForEach([&](UObject* object) {
+            if (object->HasAnyFlags(RF_ClassDefaultObject))
+            {
+                return LoopAction::Continue;
+            }
+
+            auto actor = static_cast<AActor*>(object);
+
+            auto root_component = actor->GetValuePtrByPropertyNameInChain<UObject*>(FromCharTypePtr<TCHAR>(STR("RootComponent")));
+            if (!root_component || !*root_component)
+            {
+                return LoopAction::Continue;
+            }
+
+            StringType actor_buffer{};
+
+            actor_buffer.append(fmt::format(STR("Row_{},"), actor_count));
+
+            static auto game_mode_base = UObjectGlobals::FindFirstOf(STR("GameModeBase"));
+            static auto class_property = game_mode_base->GetPropertyByNameInChain(FromCharTypePtr<TCHAR>(STR("GameStateClass")));
+            FString actor_class_string{};
+            class_property->ExportTextItem(actor_class_string, &actor->GetClassPrivate(), nullptr, nullptr, 0);
+            actor_buffer.append(fmt::format(STR("{},"), *actor_class_string));
+
+            // TODO: build system to handle other types of components - possibly including a way to specify which components to dump and which properties are important via a config file
+            actor_buffer.append(generate_root_component_csv(*root_component));
+            actor_buffer.append(STR("\""));
+            static auto static_mesh_component_class = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.StaticMeshComponent"));
+            const auto& static_mesh_components = actor->K2_GetComponentsByClass(static_mesh_component_class);
+            if (static_mesh_components.Num() > 0)
+            {
+                actor_buffer.append(STR("("));
+                for (auto [static_mesh_component_ptr, static_mesh_component_index] : static_mesh_components | views::enumerate)
+                {
+                    const auto mesh = *static_mesh_component_ptr->GetValuePtrByPropertyNameInChain<UObject*>(FromCharTypePtr<TCHAR>(STR("StaticMesh")));
+                    if (!mesh)
+                    {
+                        Output::send<LogLevel::Warning>(STR("SKIPPING COMPONENT! StaticMeshComponent '{}' has no mesh.\n"),
+                                                        static_mesh_component_ptr->GetOuterPrivate()->GetName());
+                        continue;
+                    }
+
+                    static auto mesh_property = static_mesh_component_ptr->GetPropertyByNameInChain(FromCharTypePtr<TCHAR>(STR("StaticMesh")));
+                    FString mesh_string{};
+                    mesh_property->ExportTextItem(mesh_string, &mesh, nullptr, nullptr, 0);
+                    actor_buffer.append(fmt::format(STR("(StaticMesh={}',"), *mesh_string));
+
+                    auto materials_for_each_body = [&](const UObject* material_interface) {
+                        if (material_interface)
+                        {
+                            auto material_full_name = material_interface->GetOuterPrivate()->GetFullName();
+                            const auto material_type_space_location = material_full_name.find(STR(" "));
+                            if (material_type_space_location == material_full_name.npos)
+                            {
+                                Output::send<LogLevel::Warning>(STR("SKIPPING MATERIAL! Was unable to find space in full material name in component: '{}'.\n"),
+                                                                material_full_name);
+                                return;
+                            }
+
+                            if (material_type_space_location > static_cast<unsigned long long>(std::numeric_limits<long long>::max()))
+                            {
+                                throw std::runtime_error{"integer overflow when converting material_type_space_location signed\n"};
+                            }
+                            auto material_typeless_name = StringViewType{material_full_name.begin() + static_cast<long long>(material_type_space_location) + 1,
+                                                                         material_full_name.end()};
+
+                            actor_buffer.append(fmt::format(STR("{}'"), material_interface->GetClassPrivate()->GetName()));
+                            actor_buffer.append(fmt::format(STR("\"\"{}"), material_typeless_name));
+                            actor_buffer.append(STR("\"\"'"));
+                        }
+                    };
+
+                    TArray<UObject*> material_interfaces;
+                    if (auto static_materials_property = CastField<FArrayProperty>(mesh->GetPropertyByName((STR("StaticMaterials")))))
+                    {
+                        auto static_materials_inner_property = static_materials_property->GetInner();
+
+                        if (auto static_material_property = CastField<FStructProperty>(static_materials_inner_property))
+                        {
+                            auto& static_material_struct = static_material_property->GetStruct();
+                            auto material_interface_property = static_material_struct->GetPropertyByNameInChain((STR("MaterialInterface")));
+
+                            FScriptArrayHelper_InContainer array_helper(static_materials_property, mesh);
+                            for (int32 i = 0; i < array_helper.Num(); i++)
+                            {
+                                auto material = *material_interface_property->ContainerPtrToValuePtr<UObject*>(array_helper.GetRawPtr(i));
+                                material_interfaces.Add(material);
+                            }
+                        }
+                    }
+
+                    if (material_interfaces.GetData())
+                    {
+                        actor_buffer.append(STR("Materials=("));
+                    }
+                    for (auto [material, material_index] : material_interfaces | views::enumerate)
+                    {
+                        materials_for_each_body(material);
+                        if (material_index + 1 < material_interfaces.Num())
+                        {
+                            actor_buffer.append(STR(","));
+                        }
+                        else
+                        {
+                            actor_buffer.append(STR(")"));
+                        }
+                    }
+
+                    actor_buffer.append(STR(")"));
+
+                    if (static_mesh_component_index + 1 < static_mesh_components.Num())
+                    {
+                        actor_buffer.append(STR(","));
+                    }
+                }
+                actor_buffer.append(STR(")"));
+            }
+            actor_buffer.append(STR("\"\n"));
+            file_buffer.append(actor_buffer);
+
+            ++actor_count;
+            return LoopAction::Continue;
+        });
+
+        return file_buffer;
+    }
+
+    static auto generate_actors_json_file(UClass* class_to_dump) -> StringType
+    {
+        glz::generic::array_t global_json_array{};
+
+        size_t actor_count{};
+        FindObjectSearcher(class_to_dump, AnySuperStruct::StaticClass()).ForEach([&](UObject* object) {
+            if (object->HasAnyFlags(RF_ClassDefaultObject))
+            {
+                return LoopAction::Continue;
+            }
+
+            auto actor = static_cast<AActor*>(object);
+
+            auto root_component = actor->GetValuePtrByPropertyNameInChain<UObject*>(FromCharTypePtr<TCHAR>(STR("RootComponent")));
+            if (!root_component || !*root_component)
+            {
+                return LoopAction::Continue;
+            }
+
+            glz::generic actor_json_object = glz::generic::object_t{};
+
+            actor_json_object["Name"] = to_string(fmt::format(STR("Row_{}"), actor_count));
+
+            static auto game_mode_base = UObjectGlobals::FindFirstOf(STR("GameModeBase"));
+            static auto class_property = game_mode_base->GetPropertyByNameInChain(FromCharTypePtr<TCHAR>(STR("GameStateClass")));
+            FString actor_class_string{};
+            class_property->ExportTextItem(actor_class_string, &actor->GetClassPrivate(), nullptr, nullptr, 0);
+            actor_json_object["Actor"] = to_string(fmt::format(STR("{}"), StringViewType{*actor_class_string}));
+
+            glz::generic root_component_json_object = glz::generic::object_t{};
+
+            FString root_component_class_string{};
+            class_property->ExportTextItem(root_component_class_string, &(*root_component)->GetClassPrivate(), nullptr, nullptr, 0);
+            root_component_json_object["SceneComponentClass"] = to_string(fmt::format(STR("{}"), StringViewType{*root_component_class_string}));
+
+            glz::generic location_json_object = glz::generic::object_t{};
+            auto location = (*root_component)->GetValuePtrByPropertyNameInChain<FVector>(FromCharTypePtr<TCHAR>(STR("RelativeLocation")));
+            location_json_object["X"] = location->X();
+            location_json_object["Y"] = location->Y();
+            location_json_object["Z"] = location->Z();
+            root_component_json_object["Location"] = std::move(location_json_object);
+
+            glz::generic rotation_json_object = glz::generic::object_t{};
+            auto rotation = (*root_component)->GetValuePtrByPropertyNameInChain<FRotator>(FromCharTypePtr<TCHAR>(STR("RelativeRotation")));
+            rotation_json_object["Pitch"] = rotation->GetPitch();
+            rotation_json_object["Yaw"] = rotation->GetYaw();
+            rotation_json_object["Roll"] = rotation->GetRoll();
+            root_component_json_object["Rotation"] = std::move(rotation_json_object);
+
+            glz::generic scale_json_object = glz::generic::object_t{};
+            auto scale = (*root_component)->GetValuePtrByPropertyNameInChain<FVector>(FromCharTypePtr<TCHAR>(STR("RelativeScale3D")));
+            scale_json_object["X"] = scale->X();
+            scale_json_object["Y"] = scale->Y();
+            scale_json_object["Z"] = scale->Z();
+            root_component_json_object["Scale"] = std::move(scale_json_object);
+
+            actor_json_object["RootComponent"] = std::move(root_component_json_object);
+            global_json_array.emplace_back(std::move(actor_json_object));
+
+            ++actor_count;
+            return LoopAction::Continue;
+        });
+
+        glz::generic json_root{std::move(global_json_array)};
+        if (auto result = glz::write<glz::opts{.prettify = true}>(json_root); result.has_value())
+        {
+            return ensure_str(result.value());
+        }
+        return {};
+    }
+
+    auto generate_object_as_json(UObject* object) -> StringType
+    {
+        if (!object)
+        {
+            Output::send<LogLevel::Error>(STR("Unable to dump object as JSON, object was invalid\n"));
+            return {};
+        }
+        glz::generic json{};
+        auto& meta = json["Meta"];
+        auto& values = json["Values"];
+        // Non-instance data.
+        {
+            auto& name_json = meta["NamePrivate"] = glz::generic::object_t{};
+            const auto name = object->GetNamePrivate();
+            name_json["String"] = to_string(name.ToString());
+            auto& name_components = name_json["Components"];
+            name_components["ComparisonIndex"] = name.GetComparisonIndex().ToUnstableInt();
+#ifdef WITH_CASE_PRESERVING_NAME
+            name_components["DisplayIndex"] = name.GetDisplayIndex();
+#else
+            name_components["DisplayIndex"] = nullptr;
+#endif
+            name_components["Number"] = name.GetNumber();
+        }
+        meta["Address"] = fmt::format("{:016X}", std::bit_cast<uintptr_t>(object));
+        {
+            auto& class_private = meta["ClassPrivate"] = glz::generic::object_t{};
+            class_private["Address"] = fmt::format("{:016X}", std::bit_cast<uintptr_t>(object->GetClassPrivate()));
+            class_private["Name"] = fmt::format("{}", to_string(object->GetClassPrivate()->GetName()));
+        }
+        meta["Path"] = fmt::format("{}", to_string(object->GetPathName()));
+        {
+            auto& object_flags = meta["ObjectFlags"];
+            const auto raw_unsafe_object_flags = ObjectFlagsStringifier::get_raw_flags(object);
+            object_flags["Raw"] = raw_unsafe_object_flags;
+            auto& object_flags_array = object_flags["Flags"];
+            auto& array = object_flags_array.data.emplace<glz::generic::array_t>();
+            const ObjectFlagsStringifier flags_stringifier{object};
+            for (int32_t i = 0; i < flags_stringifier.flag_parts.size(); ++i)
+            {
+                array.emplace_back(flags_stringifier.flag_parts[i]);
+            }
+        }
+        meta["PlayerControlled"] = is_player_controlled(object);
+        {
+            auto& size = meta["Size"] = glz::generic::object_t{};
+            auto& size_excl = size["Exclusive"] = glz::generic::object_t{};
+            auto& size_incl = size["Inclusive"] = glz::generic::object_t{};
+            std::vector<UClass*> all_super_structs{};
+            auto uclass = object->IsA<UStruct>() ? static_cast<UClass*>(object) : object->GetClassPrivate();
+            size["Total"] = uclass->GetPropertiesSize();
+            while (uclass)
+            {
+                all_super_structs.emplace_back(uclass);
+                auto current_class = uclass;
+                uclass = uclass->GetSuperClass();
+                if (uclass == current_class)
+                {
+                    break;
+                }
+            }
+            for (auto it = all_super_structs.begin(); it != all_super_structs.end(); ++it)
+            {
+                auto super = *it;
+                auto super_size = super->GetPropertiesSize();
+                auto supers_super_it = it;
+                ++supers_super_it;
+                if (supers_super_it != all_super_structs.end())
+                {
+                    auto supers_super = *supers_super_it;
+                    super_size -= supers_super->GetPropertiesSize();
+                }
+                size_excl[fmt::format("{}", to_string(super->GetName()))] = super_size;
+                size_incl[fmt::format("{}", to_string(super->GetName()))] = super->GetPropertiesSize();
+            }
+        }
+        // Property values.
+        if (!object->IsA<UStruct>())
+        {
+            auto add_property_value = [&](FProperty* property) {
+                const auto value_container = property->ContainerPtrToValuePtr<void>(object);
+                if (property->IsA<FObjectProperty>())
+                {
+                    const auto object_ptr = *static_cast<UObject**>(value_container);
+                    values[to_string(property->GetName())] = to_string(object_ptr ? object_ptr->GetFullName() : STR("None"));
+                }
+                else
+                {
+                    FString property_text{};
+                    property->ExportTextItem(property_text, value_container, value_container, object, NULL);
+                    values[to_string(property->GetName())] = to_string(*property_text);
+                }
+            };
+            for (const auto property : TFieldRange<FProperty>(object->GetClassPrivate(), EFieldIterationFlags::IncludeDeprecated))
+            {
+                add_property_value(property);
+            }
+            for (UStruct* super_struct : TSuperStructRange(object->GetClassPrivate()))
+            {
+                for (FProperty* property : TFieldRange<FProperty>(super_struct, EFieldIterationFlags::IncludeDeprecated))
+                {
+                    add_property_value(property);
+                }
+            }
+        }
+        if (const auto written = glz::write<glz::opts{.prettify = true}>(json); written.has_value())
+        {
+            return ensure_str(written.value());
+        }
+        else
+        {
+            Output::send<LogLevel::Error>(STR("Error creating JSON: {}\n"), ensure_str(written.error().includer_error));
+            return {};
+        }
+    }
+
+    auto CurrentDumpNums = MapDumpFileName{};
+
+    auto call_generate_static_mesh_file() -> void
+    {
+        Output::send(STR("Dumping CSV of all loaded static mesh actors, positions and mesh properties\n"));
+        static auto dump_actor_class = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.StaticMeshActor"));
+        StringType file_buffer{};
+        file_buffer.append(generate_actors_csv_file(dump_actor_class));
+        auto file =
+                File::open(fmt::format(STR("{}\\{}-ue4ss_static_mesh_data.csv"), UE4SSProgram::get_program().get_working_directory(), long(std::time(nullptr))),
+                           File::OpenFor::Writing,
+                           File::OverwriteExistingFile::Yes,
+                           File::CreateIfNonExistent::Yes);
+        file.write_string_to_file(file_buffer);
+        Output::send(STR("Finished dumping CSV of all loaded static mesh actors, positions and mesh properties\n"));
+    }
+
+    auto call_generate_all_actor_file() -> void
+    {
+        Output::send(STR("Dumping CSV of all loaded actor types, positions and mesh properties\n"));
+        StringType file_buffer{};
+        file_buffer.append(generate_actors_csv_file(AActor::StaticClass()));
+        auto file = File::open(fmt::format(STR("{}\\{}-ue4ss_actor_data.csv"), UE4SSProgram::get_program().get_working_directory(), long(std::time(nullptr))),
+                               File::OpenFor::Writing,
+                               File::OverwriteExistingFile::Yes,
+                               File::CreateIfNonExistent::Yes);
+        file.write_string_to_file(file_buffer);
+        Output::send(STR("Finished dumping CSV of all loaded actor types, positions and mesh properties\n"));
+    }
+
+    auto call_generate_object_as_json(UObject* object) -> void
+    {
+        Output::send(STR("Dumping object ({}) as JSON...\n"), object ? object->GetName() : STR("None"));
+        const StringType file_buffer = generate_object_as_json(object);
+        if (!object || file_buffer.empty())
+        {
+            Output::send<LogLevel::Error>(STR("Was unable to dump object as JSON\n"));
+            return;
+        }
+        auto file = File::open(fmt::format(STR("{}\\IndividualObjectDumps\\{}.json"), UE4SSProgram::get_program().get_working_directory(), object->GetName()),
+                               File::OpenFor::Writing,
+                               File::OverwriteExistingFile::Yes,
+                               File::CreateIfNonExistent::Yes);
+        file.write_string_to_file(file_buffer);
+        Output::send(STR("Finished dumping object as JSON\n"));
+    }
+
+    auto render() -> void
+    {
+        if (!UnrealInitializer::StaticStorage::bIsInitialized)
+        {
+            return;
+        }
+
+        if (ImGui::Button("Dump all static actor meshes to file"))
+        {
+            TRY([] {
+                call_generate_static_mesh_file();
+            });
+
+            /*auto file = File::open(StringType{UE4SSProgram::get_program().get_working_directory()} + STR("\\ue4ss_static_mesh_data.json"), File::OpenFor::Writing,
+            File::OverwriteExistingFile::Yes, File::CreateIfNonExistent::Yes); file.write_string_to_file(generate_actors_json_file(dump_actor_class));*/
+        }
+
+        if (ImGui::Button("Dump all actors to file"))
+        {
+            TRY([] {
+                call_generate_all_actor_file();
+            });
+
+            /*auto file = File::open(StringType{UE4SSProgram::get_program().get_working_directory()} + STR("\\ue4ss_actor_data.json"), File::OpenFor::Writing,
+            File::OverwriteExistingFile::Yes, File::CreateIfNonExistent::Yes); file.write_string_to_file(generate_actors_json_file(AActor::StaticClass()));*/
+        }
+
+        /*ImGui::SameLine();*/
+
+        /*if (ImGui::Button("Test #1"))
+        {
+            auto func = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, STR("/Script/Engine.KismetSystemLibrary:LoadAsset"));
+            func->ForEachProperty([](FProperty* param) {
+                Output::send<LogLevel::Verbose>(STR("{}\n"), param->GetName());
+                if (auto as_struct_prop = CastField<FStructProperty>(param); as_struct_prop)
+                {
+                    Output::send<LogLevel::Verbose>(STR("Param is StructProperty: {}\n"), as_struct_prop->GetStruct()->GetFullName());
+                    if (as_struct_prop->GetStruct()->IsChildOf(UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.LatentActionInfo"))))
+                    {
+                        Output::send<LogLevel::Verbose>(STR("StructProperty is LatentActionInfo\n"));
+                    }
+                }
+                return LoopAction::Continue;
+            });
+        }*/
+
+        if (ImGui::Button("Generate .usmap file\nUnrealMappingsDumper by OutTheShade"))
+        {
+            TRY([] {
+                OutTheShade::generate_usmap();
+            });
+        }
+
+        if (ImGui::Button("Generate TMapOverride file\n"))
+        {
+            TRY([] {
+                UEGenerator::TMapOverrideGenerator::generate_tmapoverride();
+            });
+        }
+
+        if (ImGui::Button("Generate UHT Compatible Headers\n"))
+        {
+            TRY([] {
+                UE4SSProgram::get_program().generate_uht_compatible_headers();
+            });
+        }
+
+        if (ImGui::Button("Dump CXX Headers\n"))
+        {
+            TRY([] {
+                File::StringType working_dir{UE4SSProgram::get_program().get_working_directory()};
+                UE4SSProgram::get_program().generate_cxx_headers(working_dir + STR("\\CXXHeaderDump"));
+            });
+        }
+
+        if (ImGui::Button("Generate Lua Types\n"))
+        {
+            TRY([] {
+                File::StringType working_dir{UE4SSProgram::get_program().get_working_directory()};
+                UE4SSProgram::get_program().generate_lua_types(working_dir + STR("\\Mods\\shared\\types"));
+            });
+        }
+    }
+} // namespace RC::GUI::Dumpers

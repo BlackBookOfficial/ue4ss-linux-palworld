@@ -1,0 +1,162 @@
+# CI workflow for Linux native builds and Windows cross-compilation builds
+# Linux builds include GUI (GLFW/OpenGL3) with headless EGL support
+
+name: Linux & Cross-Compile CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'linux-native'
+  pull_request:
+    branches:
+      - 'linux-native'
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'CNAME'
+      - '.github/workflows/pushdocs.yml'
+      - '.github/pull_request_template.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - 'assets/**'
+      - 'docs/**'
+      - 'docs-export/**'
+      - 'docs-repo-template/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Native Linux build with GUI enabled
+  build-linux-native:
+    name: Linux Native ${{ matrix.config }} (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        config: [Debug, Dev]
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl-dev libegl-dev libgles-dev \
+            ${{ matrix.compiler == 'clang' && 'clang lld llvm' || 'gcc g++' }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Configure CMake (Linux Native)
+        run: |
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            export CC=clang
+            export CXX=clang++
+          else
+            export CC=gcc
+            export CXX=g++
+          fi
+
+          # Print tool versions for debugging
+          $CC --version
+          $CXX --version
+          cmake --version
+          cargo --version
+          rustc --version
+
+          cmake -B build_linux_${{ matrix.config }}_${{ matrix.compiler }} \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Game__${{ matrix.config }}__Linux64 \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DUE4SS_GUI_ENABLED=ON \
+            -DUE4SS_INPUT_ENABLED=OFF \
+            -DUE4SS_PROFILERS=OFF \
+            -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE \
+            -Wno-dev 2>&1 | tee cmake_configure.log
+
+      - name: Upload configure log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-configure-log-${{ matrix.compiler }}-${{ matrix.config }}
+          path: cmake_configure.log
+          retention-days: 7
+          overwrite: true
+
+      - name: Build UE4SS (Linux Native)
+        run: |
+          cmake --build build_linux_${{ matrix.config }}_${{ matrix.compiler }} --target UE4SS --verbose
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.compiler }}-${{ matrix.config }}
+          path: |
+            build_linux_${{ matrix.config }}_${{ matrix.compiler }}/**/*.so
+            build_linux_${{ matrix.config }}_${{ matrix.compiler }}/compile_commands.json
+          retention-days: 14
+          overwrite: true
+
+  # Windows cross-compile from Linux using xwin (requires UEPseudo)
+  build-windows-cross:
+    name: Windows Cross-Compile (xwin)
+    runs-on: ubuntu-24.04
+    if: ${{ vars.ENABLE_WINDOWS_CROSS == 'true' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.UEPSEUDO_PAT }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang lld llvm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install xwin
+        run: cargo install xwin
+
+      - name: Setup xwin
+        run: |
+          xwin --accept-license splat --output $HOME/.xwin
+
+      - name: Configure CMake (Cross-Compile)
+        run: |
+          XWIN_DIR=$HOME/.xwin cmake -B build_xwin \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Game__Shipping__Win64 \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/xwin-clang-toolchain.cmake \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Build UE4SS (Cross-Compile)
+        run: |
+          cmake --build build_xwin --target UE4SS --verbose
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cross-build
+          path: |
+            build_xwin/**/*.dll
+            build_xwin/**/*.pdb
+          retention-days: 14
+          overwrite: true

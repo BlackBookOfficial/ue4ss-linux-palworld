@@ -1,0 +1,152 @@
+#include <bit>
+#include <iostream>
+#include <cstdint>
+#include <cstring>
+#include <sys/inotify.h>
+#include <sys/poll.h>
+#include <unistd.h>
+
+#include <DynamicOutput/DynamicOutput.hpp>
+#include <FilesystemWatcher.hpp>
+#include <Helpers/String.hpp>
+
+namespace RC
+{
+    auto handle_to_fd(void* handle) -> int32_t
+    {
+        return static_cast<int32_t>(reinterpret_cast<uintptr_t>(handle));
+    }
+
+    auto init_filesystem_watcher(FilesystemWatcher& watcher, const std::filesystem::path& path) -> void
+    {
+        // Create inotify fd only once; reuse for all watches
+        if (!watcher.m_handle)
+        {
+            auto handle = inotify_init1(IN_NONBLOCK);
+            watcher.m_handle = reinterpret_cast<void*>(handle);
+            if (handle == -1)
+            {
+                Output::send<LogLevel::Error>(STR("Error initializing inotify: {}"), ensure_str(std::strerror(errno)));
+                return;
+            }
+        }
+        auto file_descriptor = handle_to_fd(watcher.m_handle);
+        // Watch for file creation, modification, and moves
+        int wd = inotify_add_watch(file_descriptor, path.c_str(), IN_CREATE | IN_MODIFY | IN_MOVED_TO | IN_DELETE);
+        if (wd == -1)
+        {
+            Output::send<LogLevel::Error>(STR("Error watching '{}': {}"), ensure_str(path.string()), ensure_str(std::strerror(errno)));
+            return;
+        }
+        // Track wd → path mapping so we can reconstruct full paths in poll()
+        watcher.m_wd_to_path[wd] = path;
+    }
+
+    FilesystemWatcher::~FilesystemWatcher()
+    {
+        m_stop_source.request_stop();
+        if (m_polling_thread.joinable())
+        {
+            m_polling_thread.join();
+        }
+        if (m_handle)
+        {
+            close(handle_to_fd(m_handle));
+        }
+    }
+
+    auto FilesystemWatcher::poll(std::stop_token stop_token) -> void
+    {
+        while (!stop_token.stop_requested())
+        {
+            pollfd file_descriptors[1]{};
+            file_descriptors[0].fd = handle_to_fd(m_handle);
+            file_descriptors[0].events = POLLIN;
+
+            auto poll_num = ::poll(file_descriptors, 1, s_polling_timeout_ms);
+            if (poll_num == 0)
+            {
+                continue;
+            }
+            else if (poll_num == -1)
+            {
+                if (errno == EINTR)
+                {
+                    continue;
+                }
+                else
+                {
+                    Output::send<LogLevel::Error>(STR("FilesystemWatcher poll error: {}"), ensure_str(std::strerror(errno)));
+                    break;
+                }
+            }
+            else if (poll_num > 0)
+            {
+                if (file_descriptors[0].revents & POLLIN)
+                {
+                    while (true)
+                    {
+                        // See https://www.man7.org/linux/man-pages/man7/inotify.7.html#EXAMPLES for why this is aligned like this.
+                        char buffer[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+                        auto length = read(handle_to_fd(m_handle), buffer, sizeof(buffer));
+                        if (length == -1 && errno != EAGAIN)
+                        {
+                            Output::send<LogLevel::Error>(STR("FilesystemWatcher read error: {}"), ensure_str(std::strerror(errno)));
+                            break;
+                        }
+                        else if (length <= 0)
+                        {
+                            break;
+                        }
+                        const inotify_event* event{};
+                        for (auto ptr = buffer; ptr < buffer + length; ptr += sizeof(inotify_event) + event->len)
+                        {
+                            event = std::bit_cast<const inotify_event*>(ptr);
+                            if (event->len <= 0)
+                            {
+                                continue;
+                            }
+
+                            // Check for relevant events: creation, modification, move, deletion
+                            uint32_t relevant_mask = IN_CREATE | IN_MODIFY | IN_MOVED_TO | IN_DELETE;
+                            if (!(event->mask & relevant_mask))
+                            {
+                                continue;
+                            }
+
+                            // Look up the watched directory path for this wd
+                            auto wd_it = m_wd_to_path.find(event->wd);
+                            if (wd_it == m_wd_to_path.end())
+                            {
+                                continue;
+                            }
+
+                            const auto& watched_dir = wd_it->second;
+                            std::string name_string{event->name};
+
+                            // Debounce: skip if too soon after last notification
+                            auto now = std::chrono::high_resolution_clock::now();
+                            if (now - m_last_notification < m_min_duration_between_notifications)
+                            {
+                                continue;
+                            }
+
+                            // Notify all watches with the watched directory path
+                            // The callback uses file.parent_path().filename() for mod name
+                            // and file.filename().string() for directory name
+                            m_last_notification = now;
+                            for (const auto& watch : m_watches)
+                            {
+                                if (watch.name == "*" || name_string == watch.name)
+                                {
+                                    // Pass the watched directory path so callback can determine mod name
+                                    watch.notify(watched_dir, false);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+} // namespace RC

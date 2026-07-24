@@ -1,0 +1,267 @@
+name: Linux Release Publisher
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Mark as pre-release'
+        type: boolean
+        default: false
+      tag_name:
+        description: 'Release tag name (e.g. v3.0.1-linux)'
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-release
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    name: Build and Publish Linux Release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Fetch all tags
+        run: git fetch --tags --force origin
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl-dev libegl-dev libgles-dev \
+            gcc g++ binutils
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Configure CMake (Linux Development)
+        run: |
+          export CC=gcc
+          export CXX=g++
+          cmake -B build_linux \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Game__Dev__Linux64 \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DUE4SS_GUI_ENABLED=ON \
+            -DUE4SS_INPUT_ENABLED=OFF \
+            -DUE4SS_PROFILERS=OFF \
+            -Wno-dev
+
+      - name: Build UE4SS (Development)
+        run: |
+          cmake --build build_linux --target UE4SS --verbose
+
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          # Get the previous release tag
+          PREV_TAG=$(git tag --sort=-creatordate | grep "linux-dev" | grep -v "${{ inputs.tag_name }}" | head -1)
+          if [ -z "$PREV_TAG" ]; then
+            PREV_TAG=$(git tag --sort=-creatordate | grep -v "${{ inputs.tag_name }}" | head -1)
+          fi
+          echo "Previous tag: ${PREV_TAG:-none}"
+          
+          # Export for Python
+          export PREV_TAG
+          export RELEASE_TAG="${{ inputs.tag_name }}"
+          export REPO="${{ github.repository }}"
+          
+          python3 << 'PYEOF'
+          import subprocess, os, re, sys
+
+          prev_tag = os.environ.get("PREV_TAG", "")
+          release_tag = os.environ.get("RELEASE_TAG", "")
+          repo = os.environ.get("REPO", "")
+
+          # Get commits with subject and body
+          if prev_tag:
+              fmt = "%x00%s%n%b"
+              result = subprocess.run(
+                  ["git", "log", f"--pretty=format:{fmt}", f"{prev_tag}..HEAD", "--no-merges"],
+                  capture_output=True, text=True
+              )
+          else:
+              result = subprocess.run(
+                  ["git", "log", f"--pretty=format:{fmt}", "-50", "--no-merges"],
+                  capture_output=True, text=True
+              )
+
+          commits_raw = result.stdout.strip()
+          if not commits_raw:
+              commits = []
+          else:
+              # Split by null byte delimiter
+              commits = [c.strip() for c in commits_raw.split("\x00") if c.strip()]
+
+          # Categorize commits
+          categories = {
+              "features": [],
+              "fixes": [],
+              "refactors": [],
+              "other": []
+          }
+
+          for commit in commits:
+              lines = commit.split("\n")
+              subject = lines[0].strip() if lines else ""
+              body_lines = [l.strip() for l in lines[1:] if l.strip()]
+
+              if not subject:
+                  continue
+
+              lower = subject.lower()
+              if re.match(r'^(feat|feature|add|implement)', lower):
+                  cat = "features"
+              elif re.match(r'^(fix|bugfix|hotfix)', lower):
+                  cat = "fixes"
+              elif re.match(r'^(refactor|cleanup|optim|perf)', lower):
+                  cat = "refactors"
+              else:
+                  cat = "other"
+
+              # Build entry: bold subject + sub-bullets from body
+              entry = f"- **{subject}**"
+              for bl in body_lines:
+                  # Remove leading "- " if present to avoid double bullets
+                  bl = re.sub(r'^[-•]\s*', '', bl)
+                  entry += f"\n  - {bl}"
+              entry += "\n"
+              categories[cat].append(entry)
+
+          # Assemble changelog
+          output = []
+          if categories["features"]:
+              output.append("### ✨ Features")
+              output.extend(categories["features"])
+              output.append("")
+          if categories["fixes"]:
+              output.append("### 🐛 Bug Fixes")
+              output.extend(categories["fixes"])
+              output.append("")
+          if categories["refactors"]:
+              output.append("### 🔧 Refactoring & Optimization")
+              output.extend(categories["refactors"])
+              output.append("")
+          if categories["other"]:
+              output.append("### 📝 Other Changes")
+              output.extend(categories["other"])
+              output.append("")
+          if not any(categories.values()):
+              output.append("No changes since the last release.")
+              output.append("")
+
+          output.append("---")
+          # Build compare URL
+          if prev_tag:
+              compare_base = prev_tag
+          else:
+              # Get initial commit
+              r = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True)
+              compare_base = r.stdout.strip().split("\n")[0] if r.stdout.strip() else "initial"
+
+          compare_url = f"https://github.com/{repo}/compare/{compare_base}...{release_tag}"
+          output.append(f"**Full commit history:** [{prev_tag or 'initial'}...{release_tag}]({compare_url})")
+
+          changelog = "\n".join(output)
+
+          # Write to GITHUB_OUTPUT
+          gh_output = os.environ.get("GITHUB_OUTPUT", "")
+          if gh_output:
+              with open(gh_output, "a") as f:
+                  f.write("CHANGELOG<<CHANGELOG_EOF\n")
+                  f.write(changelog + "\n")
+                  f.write("CHANGELOG_EOF\n")
+
+          print(changelog)
+          PYEOF
+          
+      - name: Strip and prepare artifacts
+        run: |
+          mkdir -p release
+          # Find the built .so file
+          SO_FILE=$(find build_linux -name "libUE4SS.so" -type f | head -1)
+          if [ -z "$SO_FILE" ]; then
+            echo "ERROR: libUE4SS.so not found!"
+            exit 1
+          fi
+          echo "Found: $SO_FILE"
+          ls -lh "$SO_FILE"
+          # Strip debug symbols
+          cp "$SO_FILE" release/libUE4SS.so
+          strip --strip-debug release/libUE4SS.so
+          ls -lh release/libUE4SS.so
+          # Generate build info
+          cat > release/BUILD_INFO.txt << EOF
+          UE4SS Linux Native Build
+          ========================
+          Tag: ${{ inputs.tag_name }}
+          Commit: $(git rev-parse HEAD)
+          Branch: $(git branch --show-current)
+          Build Type: Game__Dev__Linux64
+          Compiler: $(gcc --version | head -1)
+          Build Host: ubuntu-24.04 (x86_64)
+          GUI: Enabled (GLFW3/OpenGL3)
+          Input: Disabled
+          Profilers: Disabled
+          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          EOF
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-artifacts
+          path: release/
+          retention-days: 1
+          overwrite: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name }}
+          prerelease: ${{ inputs.prerelease }}
+          target_commitish: linux-native
+          body: |
+            ## UE4SS ${{ inputs.tag_name }} — Linux Native Build
+            
+            ${{ steps.changelog.outputs.CHANGELOG }}
+            
+            ---
+            
+            ### Build Configuration
+            - Build Type: Game__Dev__Linux64
+            - GUI: Enabled (GLFW3/OpenGL3)
+            - Input: Disabled
+            - Profilers: Disabled
+            - Compiler: GCC (Ubuntu 24.04)
+            
+            ### Artifacts
+            - `libUE4SS.so` — Stripped shared library
+            - `BUILD_INFO.txt` — Build metadata
+            
+            ### Usage
+            ```bash
+            LD_PRELOAD=./libUE4SS.so ./YourGameBinary
+            ```
+            
+            ### Compatibility
+            - Built on Ubuntu 24.04 (x86_64)
+            - Requires: libGL, libEGL, libX11, libXrandr, libXinerama, libXcursor, libXi
+            - Engine Tick Hook: Auto-detected via dlsym (or manual override in UE4SS_Addresses.ini)
+          files: |
+            release/libUE4SS.so
+            release/BUILD_INFO.txt

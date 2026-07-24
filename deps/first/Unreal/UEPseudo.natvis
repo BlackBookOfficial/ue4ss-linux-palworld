@@ -1,0 +1,755 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+  <!-- UEPseudo Debug Visualizers for RC::Unreal types -->
+
+  <!--
+    Notes:
+    - These visualizers are for UEPseudo's RC::Unreal namespace types
+    - FName cannot show the actual string without access to game's GNameBlocksDebug
+    - Set "Tools / Options / Debugging / Output Windows / Natvis Diagnostics messages" to Warning for debugging
+  -->
+
+  <!-- ==================== TArray ==================== -->
+
+  <!-- TArray with TSizedHeapAllocator (default) -->
+  <Type Name="RC::Unreal::TArray&lt;*,RC::Unreal::TSizedHeapAllocator&lt;*,*&gt;&gt;">
+    <DisplayString Condition="ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="ArrayNum &lt; 0 || ArrayNum &gt; ArrayMax">Invalid (Num={ArrayNum}, Max={ArrayMax})</DisplayString>
+    <DisplayString>Num={ArrayNum}, Max={ArrayMax}</DisplayString>
+    <Expand>
+      <Item Name="[Num]">ArrayNum</Item>
+      <Item Name="[Max]">ArrayMax</Item>
+      <ArrayItems>
+        <Size>(ArrayNum &lt; 0 || ArrayNum &gt; ArrayMax) ? 0 : ArrayNum</Size>
+        <ValuePointer>($T1*)AllocatorInstance.Data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <!-- TArray with FDefaultAllocator -->
+  <Type Name="RC::Unreal::TArray&lt;*,RC::Unreal::FDefaultAllocator&gt;">
+    <DisplayString Condition="ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="ArrayNum &lt; 0 || ArrayNum &gt; ArrayMax">Invalid (Num={ArrayNum}, Max={ArrayMax})</DisplayString>
+    <DisplayString>Num={ArrayNum}, Max={ArrayMax}</DisplayString>
+    <Expand>
+      <Item Name="[Num]">ArrayNum</Item>
+      <Item Name="[Max]">ArrayMax</Item>
+      <ArrayItems>
+        <Size>(ArrayNum &lt; 0 || ArrayNum &gt; ArrayMax) ? 0 : ArrayNum</Size>
+        <ValuePointer>($T1*)AllocatorInstance.Data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <!-- Generic TArray fallback -->
+  <Type Name="RC::Unreal::TArray&lt;*,*&gt;">
+    <DisplayString Condition="ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="ArrayNum &lt; 0 || ArrayNum &gt; ArrayMax">Invalid (Num={ArrayNum}, Max={ArrayMax})</DisplayString>
+    <DisplayString>Num={ArrayNum}, Max={ArrayMax}</DisplayString>
+    <Expand>
+      <Item Name="[Num]">ArrayNum</Item>
+      <Item Name="[Max]">ArrayMax</Item>
+      <ArrayItems>
+        <Size>(ArrayNum &lt; 0 || ArrayNum &gt; ArrayMax) ? 0 : ArrayNum</Size>
+        <ValuePointer>($T1*)AllocatorInstance.Data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <!-- ==================== FString / TStringBase ==================== -->
+
+  <!-- FString (wide string) -->
+  <Type Name="RC::Unreal::FString">
+    <DisplayString Condition="Data.ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="Data.ArrayNum &lt; 0 || Data.ArrayNum &gt; Data.ArrayMax">Invalid</DisplayString>
+    <DisplayString>{(wchar_t*)Data.AllocatorInstance.Data,su}</DisplayString>
+    <StringView Condition="Data.ArrayNum &gt; 0">(wchar_t*)Data.AllocatorInstance.Data,su</StringView>
+    <Expand>
+      <Item Name="[Length]">Data.ArrayNum - 1</Item>
+      <Item Name="[Capacity]">Data.ArrayMax</Item>
+      <ArrayItems>
+        <Size>(Data.ArrayNum &lt; 0 || Data.ArrayNum &gt; Data.ArrayMax) ? 0 : (Data.ArrayNum == 0 ? 0 : Data.ArrayNum - 1)</Size>
+        <ValuePointer>(wchar_t*)Data.AllocatorInstance.Data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <!-- FStringOut (same as FString) -->
+  <Type Name="RC::Unreal::FStringOut">
+    <DisplayString Condition="Data.ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="Data.ArrayNum &lt; 0 || Data.ArrayNum &gt; Data.ArrayMax">Invalid</DisplayString>
+    <DisplayString>{(wchar_t*)Data.AllocatorInstance.Data,su}</DisplayString>
+    <StringView Condition="Data.ArrayNum &gt; 0">(wchar_t*)Data.AllocatorInstance.Data,su</StringView>
+    <Expand>
+      <Item Name="[Length]">Data.ArrayNum - 1</Item>
+      <Item Name="[Capacity]">Data.ArrayMax</Item>
+    </Expand>
+  </Type>
+
+  <!-- TStringBase<wchar_t> -->
+  <Type Name="RC::Unreal::TStringBase&lt;wchar_t&gt;">
+    <DisplayString Condition="Data.ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="Data.ArrayNum &lt; 0 || Data.ArrayNum &gt; Data.ArrayMax">Invalid</DisplayString>
+    <DisplayString>{(wchar_t*)Data.AllocatorInstance.Data,su}</DisplayString>
+    <StringView Condition="Data.ArrayNum &gt; 0">(wchar_t*)Data.AllocatorInstance.Data,su</StringView>
+    <Expand>
+      <Item Name="[Length]">Data.ArrayNum - 1</Item>
+      <Item Name="[Capacity]">Data.ArrayMax</Item>
+    </Expand>
+  </Type>
+
+  <!-- FAnsiString / TStringBase<char> -->
+  <Type Name="RC::Unreal::FAnsiString">
+    <DisplayString Condition="Data.ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="Data.ArrayNum &lt; 0 || Data.ArrayNum &gt; Data.ArrayMax">Invalid</DisplayString>
+    <DisplayString>{(char*)Data.AllocatorInstance.Data,s}</DisplayString>
+    <StringView Condition="Data.ArrayNum &gt; 0">(char*)Data.AllocatorInstance.Data,s</StringView>
+    <Expand>
+      <Item Name="[Length]">Data.ArrayNum - 1</Item>
+      <Item Name="[Capacity]">Data.ArrayMax</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="RC::Unreal::TStringBase&lt;char&gt;">
+    <DisplayString Condition="Data.ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="Data.ArrayNum &lt; 0 || Data.ArrayNum &gt; Data.ArrayMax">Invalid</DisplayString>
+    <DisplayString>{(char*)Data.AllocatorInstance.Data,s}</DisplayString>
+    <StringView Condition="Data.ArrayNum &gt; 0">(char*)Data.AllocatorInstance.Data,s</StringView>
+    <Expand>
+      <Item Name="[Length]">Data.ArrayNum - 1</Item>
+      <Item Name="[Capacity]">Data.ArrayMax</Item>
+    </Expand>
+  </Type>
+
+  <!-- FUtf8String / TStringBase<UTF8CHAR> -->
+  <Type Name="RC::Unreal::FUtf8String">
+    <DisplayString Condition="Data.ArrayNum == 0">Empty</DisplayString>
+    <DisplayString Condition="Data.ArrayNum &lt; 0 || Data.ArrayNum &gt; Data.ArrayMax">Invalid</DisplayString>
+    <DisplayString>{(char*)Data.AllocatorInstance.Data,s8}</DisplayString>
+    <StringView Condition="Data.ArrayNum &gt; 0">(char*)Data.AllocatorInstance.Data,s8</StringView>
+    <Expand>
+      <Item Name="[Length]">Data.ArrayNum - 1</Item>
+      <Item Name="[Capacity]">Data.ArrayMax</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== FName ==================== -->
+
+  <!--
+    FName visualization is limited without access to game's name table.
+    We show the indices which can be looked up manually or via UE4SS tools.
+  -->
+
+  <!-- FName with case preserving (has DisplayIndex) -->
+  <Type Name="RC::Unreal::FName" Priority="Medium">
+    <DisplayString Condition="ComparisonIndex == 0 &amp;&amp; Number == 0">NAME_None</DisplayString>
+    <DisplayString Condition="Number != 0">FName(Index={ComparisonIndex}, Number={Number - 1})</DisplayString>
+    <DisplayString>FName(Index={ComparisonIndex})</DisplayString>
+    <Expand>
+      <Item Name="[ComparisonIndex]">ComparisonIndex</Item>
+      <Item Name="[DisplayIndex]" Optional="true">DisplayIndex</Item>
+      <Item Name="[Number]" Condition="Number != 0">Number - 1</Item>
+    </Expand>
+  </Type>
+
+  <!-- FNameEntryId -->
+  <Type Name="RC::Unreal::FNameEntryId">
+    <DisplayString Condition="Value == 0">NAME_None</DisplayString>
+    <DisplayString>FNameEntryId({Value})</DisplayString>
+  </Type>
+
+  <!-- ==================== Math Types ==================== -->
+
+  <!-- FVector / TVector -->
+  <Type Name="RC::Unreal::FVector">
+    <DisplayString>{{X={X}, Y={Y}, Z={Z}}}</DisplayString>
+    <Expand>
+      <Item Name="X">X</Item>
+      <Item Name="Y">Y</Item>
+      <Item Name="Z">Z</Item>
+      <Item Name="[Length²]">X*X + Y*Y + Z*Z</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="RC::Unreal::TVector&lt;*&gt;">
+    <DisplayString>{{X={X}, Y={Y}, Z={Z}}}</DisplayString>
+    <Expand>
+      <Item Name="X">X</Item>
+      <Item Name="Y">Y</Item>
+      <Item Name="Z">Z</Item>
+      <Item Name="[Length²]">X*X + Y*Y + Z*Z</Item>
+    </Expand>
+  </Type>
+
+  <!-- FVector2D -->
+  <Type Name="RC::Unreal::FVector2D">
+    <DisplayString>{{X={X}, Y={Y}}}</DisplayString>
+    <Expand>
+      <Item Name="X">X</Item>
+      <Item Name="Y">Y</Item>
+    </Expand>
+  </Type>
+
+  <!-- FVector4 -->
+  <Type Name="RC::Unreal::FVector4">
+    <DisplayString>{{X={X}, Y={Y}, Z={Z}, W={W}}}</DisplayString>
+    <Expand>
+      <Item Name="X">X</Item>
+      <Item Name="Y">Y</Item>
+      <Item Name="Z">Z</Item>
+      <Item Name="W">W</Item>
+    </Expand>
+  </Type>
+
+  <!-- FRotator -->
+  <Type Name="RC::Unreal::FRotator">
+    <DisplayString>{{Pitch={Pitch}, Yaw={Yaw}, Roll={Roll}}}</DisplayString>
+    <Expand>
+      <Item Name="Pitch (Y)">Pitch</Item>
+      <Item Name="Yaw (Z)">Yaw</Item>
+      <Item Name="Roll (X)">Roll</Item>
+    </Expand>
+  </Type>
+
+  <!-- FQuat -->
+  <Type Name="RC::Unreal::FQuat">
+    <DisplayString>{{X={X}, Y={Y}, Z={Z}, W={W}}}</DisplayString>
+    <Expand>
+      <Item Name="X">X</Item>
+      <Item Name="Y">Y</Item>
+      <Item Name="Z">Z</Item>
+      <Item Name="W">W</Item>
+      <Item Name="[Normalized²]">X*X + Y*Y + Z*Z + W*W</Item>
+    </Expand>
+  </Type>
+
+  <!-- FTransform -->
+  <Type Name="RC::Unreal::FTransform">
+    <DisplayString>{{Loc=({Translation.X},{Translation.Y},{Translation.Z}), Rot=({Rotation.X},{Rotation.Y},{Rotation.Z},{Rotation.W})}}</DisplayString>
+    <Expand>
+      <Synthetic Name="Translation">
+        <DisplayString>{{X={Translation.X}, Y={Translation.Y}, Z={Translation.Z}}}</DisplayString>
+        <Expand>
+          <Item Name="X">Translation.X</Item>
+          <Item Name="Y">Translation.Y</Item>
+          <Item Name="Z">Translation.Z</Item>
+        </Expand>
+      </Synthetic>
+      <Synthetic Name="Rotation">
+        <DisplayString>{{X={Rotation.X}, Y={Rotation.Y}, Z={Rotation.Z}, W={Rotation.W}}}</DisplayString>
+        <Expand>
+          <Item Name="X">Rotation.X</Item>
+          <Item Name="Y">Rotation.Y</Item>
+          <Item Name="Z">Rotation.Z</Item>
+          <Item Name="W">Rotation.W</Item>
+        </Expand>
+      </Synthetic>
+      <Synthetic Name="Scale3D">
+        <DisplayString>{{X={Scale3D.X}, Y={Scale3D.Y}, Z={Scale3D.Z}}}</DisplayString>
+        <Expand>
+          <Item Name="X">Scale3D.X</Item>
+          <Item Name="Y">Scale3D.Y</Item>
+          <Item Name="Z">Scale3D.Z</Item>
+        </Expand>
+      </Synthetic>
+    </Expand>
+  </Type>
+
+  <!-- FMatrix -->
+  <Type Name="RC::Unreal::FMatrix">
+    <DisplayString>FMatrix</DisplayString>
+    <Expand>
+      <Item Name="[0]">M[0]</Item>
+      <Item Name="[1]">M[1]</Item>
+      <Item Name="[2]">M[2]</Item>
+      <Item Name="[3]">M[3]</Item>
+    </Expand>
+  </Type>
+
+  <!-- FLinearColor -->
+  <Type Name="RC::Unreal::FLinearColor">
+    <DisplayString>{{R={R}, G={G}, B={B}, A={A}}}</DisplayString>
+    <Expand>
+      <Item Name="R">R</Item>
+      <Item Name="G">G</Item>
+      <Item Name="B">B</Item>
+      <Item Name="A">A</Item>
+    </Expand>
+  </Type>
+
+  <!-- FColor -->
+  <Type Name="RC::Unreal::FColor">
+    <DisplayString>{{R={R}, G={G}, B={B}, A={A}}}</DisplayString>
+    <Expand>
+      <Item Name="R">R</Item>
+      <Item Name="G">G</Item>
+      <Item Name="B">B</Item>
+      <Item Name="A">A</Item>
+    </Expand>
+  </Type>
+
+  <!-- FBox -->
+  <Type Name="RC::Unreal::FBox">
+    <DisplayString>{{Min=({Min.X},{Min.Y},{Min.Z}), Max=({Max.X},{Max.Y},{Max.Z})}}</DisplayString>
+    <Expand>
+      <Item Name="Min">Min</Item>
+      <Item Name="Max">Max</Item>
+      <Item Name="IsValid">IsValid</Item>
+    </Expand>
+  </Type>
+
+  <!-- FPlane -->
+  <Type Name="RC::Unreal::FPlane">
+    <DisplayString>{{X={X}, Y={Y}, Z={Z}, W={W}}}</DisplayString>
+    <Expand>
+      <Item Name="X">X</Item>
+      <Item Name="Y">Y</Item>
+      <Item Name="Z">Z</Item>
+      <Item Name="W">W</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== UObject Types ==================== -->
+
+  <!-- UObjectBase - show name for quick identification -->
+  <Type Name="RC::Unreal::UObjectBase">
+    <DisplayString>{NamePrivate}</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Class]">ClassPrivate</Item>
+      <Item Name="[Outer]">OuterPrivate</Item>
+      <Item Name="[Flags]">(RC::Unreal::EObjectFlags)ObjectFlags</Item>
+      <Item Name="[InternalIndex]">InternalIndex</Item>
+    </Expand>
+  </Type>
+
+  <!-- UObject -->
+  <Type Name="RC::Unreal::UObject">
+    <DisplayString>{NamePrivate}</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Class]">ClassPrivate</Item>
+      <Item Name="[Outer]">OuterPrivate</Item>
+      <Item Name="[Flags]">(RC::Unreal::EObjectFlags)ObjectFlags</Item>
+    </Expand>
+  </Type>
+
+  <!-- UClass -->
+  <Type Name="RC::Unreal::UClass">
+    <DisplayString>{NamePrivate} (UClass)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[SuperClass]">SuperStruct</Item>
+      <Item Name="[ClassFlags]">(RC::Unreal::EClassFlags)ClassFlags</Item>
+      <Item Name="[ClassDefaultObject]">ClassDefaultObject</Item>
+    </Expand>
+  </Type>
+
+  <!-- UStruct -->
+  <Type Name="RC::Unreal::UStruct">
+    <DisplayString>{NamePrivate} (UStruct)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[SuperStruct]">SuperStruct</Item>
+      <Item Name="[PropertiesSize]">PropertiesSize</Item>
+    </Expand>
+  </Type>
+
+  <!-- UFunction -->
+  <Type Name="RC::Unreal::UFunction">
+    <DisplayString>{NamePrivate} (UFunction)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[FunctionFlags]">(RC::Unreal::EFunctionFlags)FunctionFlags</Item>
+      <Item Name="[NumParms]">NumParms</Item>
+      <Item Name="[ParmsSize]">ParmsSize</Item>
+      <Item Name="[ReturnValueOffset]">ReturnValueOffset</Item>
+    </Expand>
+  </Type>
+
+  <!-- UProperty / FProperty -->
+  <Type Name="RC::Unreal::FProperty">
+    <DisplayString>{NamePrivate} (FProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[ElementSize]">ElementSize</Item>
+      <Item Name="[PropertyFlags]">(RC::Unreal::EPropertyFlags)PropertyFlags</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Container Types ==================== -->
+
+  <!-- TMap - basic visualization -->
+  <Type Name="RC::Unreal::TMap&lt;*,*,*&gt;">
+    <DisplayString>TMap (Pairs={Pairs.Elements.ArrayNum})</DisplayString>
+    <Expand>
+      <Item Name="[Num]">Pairs.Elements.ArrayNum</Item>
+      <Synthetic Name="[Pairs]">
+        <DisplayString>{Pairs}</DisplayString>
+        <Expand>
+          <ExpandedItem>Pairs</ExpandedItem>
+        </Expand>
+      </Synthetic>
+    </Expand>
+  </Type>
+
+  <!-- TSet - basic visualization -->
+  <Type Name="RC::Unreal::TSet&lt;*,*,*&gt;">
+    <DisplayString>TSet (Elements={Elements.ArrayNum})</DisplayString>
+    <Expand>
+      <Item Name="[Num]">Elements.ArrayNum</Item>
+      <Synthetic Name="[Elements]">
+        <DisplayString>{Elements}</DisplayString>
+        <Expand>
+          <ExpandedItem>Elements</ExpandedItem>
+        </Expand>
+      </Synthetic>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Smart Pointers ==================== -->
+
+  <!-- TObjectPtr -->
+  <Type Name="RC::Unreal::TObjectPtr&lt;*&gt;">
+    <DisplayString Condition="ObjectPtr == 0">nullptr</DisplayString>
+    <DisplayString>{*($T1*)ObjectPtr}</DisplayString>
+    <Expand>
+      <ExpandedItem Condition="ObjectPtr != 0">*($T1*)ObjectPtr</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- TWeakObjectPtr -->
+  <Type Name="RC::Unreal::TWeakObjectPtr&lt;*&gt;">
+    <DisplayString>TWeakObjectPtr (Index={ObjectIndex}, Serial={ObjectSerialNumber})</DisplayString>
+    <Expand>
+      <Item Name="[ObjectIndex]">ObjectIndex</Item>
+      <Item Name="[SerialNumber]">ObjectSerialNumber</Item>
+    </Expand>
+  </Type>
+
+  <!-- TSoftObjectPtr -->
+  <Type Name="RC::Unreal::TSoftObjectPtr&lt;*&gt;">
+    <DisplayString>{ObjectID}</DisplayString>
+    <Expand>
+      <Item Name="[ObjectID]">ObjectID</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Misc Types ==================== -->
+
+  <!-- FGuid -->
+  <Type Name="RC::Unreal::FGuid">
+    <DisplayString>{{{A,Xb}-{(unsigned short)(B >> 16),Xb}-{(unsigned short)B,Xb}-{(unsigned short)(C >> 16),Xb}-{(unsigned short)C,Xb}{D,Xb}}}</DisplayString>
+    <Expand>
+      <Item Name="A">A,X</Item>
+      <Item Name="B">B,X</Item>
+      <Item Name="C">C,X</Item>
+      <Item Name="D">D,X</Item>
+    </Expand>
+  </Type>
+
+  <!-- TEnumAsByte -->
+  <Type Name="RC::Unreal::TEnumAsByte&lt;*&gt;">
+    <DisplayString>{($T1)Value}</DisplayString>
+  </Type>
+
+  <!-- ==================== Asset/Path Types ==================== -->
+
+  <!-- FSoftObjectPath -->
+  <Type Name="RC::Unreal::FSoftObjectPath">
+    <DisplayString>{AssetPathName}</DisplayString>
+    <Expand>
+      <Item Name="[AssetPath]">AssetPathName</Item>
+      <Item Name="[SubPath]">SubPathString</Item>
+    </Expand>
+  </Type>
+
+  <!-- FTopLevelAssetPath -->
+  <Type Name="RC::Unreal::FTopLevelAssetPath">
+    <DisplayString>{PackageName}.{AssetName}</DisplayString>
+    <Expand>
+      <Item Name="[Package]">PackageName</Item>
+      <Item Name="[Asset]">AssetName</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Text Types ==================== -->
+
+  <!-- FText -->
+  <Type Name="RC::Unreal::FText">
+    <DisplayString Condition="Data == 0">Empty</DisplayString>
+    <DisplayString>FText (Data={Data})</DisplayString>
+    <Expand>
+      <Item Name="[Data]">Data</Item>
+      <Item Name="[Flags]">Flags</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Weak/Lazy Pointers ==================== -->
+
+  <!-- FWeakObjectPtr -->
+  <Type Name="RC::Unreal::FWeakObjectPtr">
+    <DisplayString Condition="ObjectSerialNumber == 0">nullptr</DisplayString>
+    <DisplayString>FWeakObjectPtr (Index={ObjectIndex}, Serial={ObjectSerialNumber})</DisplayString>
+    <Expand>
+      <Item Name="[ObjectIndex]">ObjectIndex</Item>
+      <Item Name="[SerialNumber]">ObjectSerialNumber</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Field Types ==================== -->
+
+  <!-- FField -->
+  <Type Name="RC::Unreal::FField">
+    <DisplayString>{NamePrivate}</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Owner]">Owner</Item>
+      <Item Name="[Next]">Next</Item>
+    </Expand>
+  </Type>
+
+  <!-- FFieldClass -->
+  <Type Name="RC::Unreal::FFieldClass">
+    <DisplayString>{Name}</DisplayString>
+    <Expand>
+      <Item Name="[Name]">Name</Item>
+      <Item Name="[Id]">Id</Item>
+      <Item Name="[SuperClass]">SuperClass</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== UObject Derived Types ==================== -->
+
+  <!-- AActor -->
+  <Type Name="RC::Unreal::AActor">
+    <DisplayString>{NamePrivate} (AActor)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Class]">ClassPrivate</Item>
+      <Item Name="[Outer]">OuterPrivate</Item>
+    </Expand>
+  </Type>
+
+  <!-- UEnum -->
+  <!--
+    NOTE: UEnum::Names uses runtime offset lookup (MemberOffsets map),
+    so natvis cannot directly visualize enum values.
+    Use NumEnums() and ForEachName() at runtime to inspect values.
+  -->
+  <Type Name="RC::Unreal::UEnum">
+    <DisplayString>{NamePrivate} (UEnum)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Class]">ClassPrivate</Item>
+      <Item Name="[Outer]">OuterPrivate</Item>
+    </Expand>
+  </Type>
+
+  <!-- TPair for enum name/value - specialized for FName,int64 -->
+  <Type Name="RC::Unreal::TPair&lt;RC::Unreal::FName,__int64&gt;">
+    <DisplayString>FName({Key.ComparisonIndex}) = {Value}</DisplayString>
+    <Expand>
+      <Item Name="[Name]">Key</Item>
+      <Item Name="[Value]">Value</Item>
+    </Expand>
+  </Type>
+
+  <!-- TTuple for enum name/value - specialized for FName,int64 -->
+  <Type Name="RC::Unreal::TTuple&lt;RC::Unreal::FName,__int64&gt;">
+    <DisplayString>FName({Key.ComparisonIndex}) = {Value}</DisplayString>
+    <Expand>
+      <Item Name="[Name]">Key</Item>
+      <Item Name="[Value]">Value</Item>
+    </Expand>
+  </Type>
+
+  <!-- Generic TPair -->
+  <Type Name="RC::Unreal::TPair&lt;*,*&gt;">
+    <DisplayString>{{Key={Key}, Value={Value}}}</DisplayString>
+    <Expand>
+      <Item Name="Key">Key</Item>
+      <Item Name="Value">Value</Item>
+    </Expand>
+  </Type>
+
+  <!-- Generic TTuple (2 elements) -->
+  <Type Name="RC::Unreal::TTuple&lt;*,*&gt;">
+    <DisplayString>{{Key={Key}, Value={Value}}}</DisplayString>
+    <Expand>
+      <Item Name="Key">Key</Item>
+      <Item Name="Value">Value</Item>
+    </Expand>
+  </Type>
+
+  <!-- UScriptStruct -->
+  <Type Name="RC::Unreal::UScriptStruct">
+    <DisplayString>{NamePrivate} (UScriptStruct)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[SuperStruct]">SuperStruct</Item>
+      <Item Name="[PropertiesSize]">PropertiesSize</Item>
+    </Expand>
+  </Type>
+
+  <!-- UPackage -->
+  <Type Name="RC::Unreal::UPackage">
+    <DisplayString>{NamePrivate} (UPackage)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+    </Expand>
+  </Type>
+
+  <!-- UWorld -->
+  <Type Name="RC::Unreal::UWorld">
+    <DisplayString>{NamePrivate} (UWorld)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Property Derived Types ==================== -->
+
+  <!-- FBoolProperty -->
+  <Type Name="RC::Unreal::FBoolProperty">
+    <DisplayString>{NamePrivate} (FBoolProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[FieldSize]">FieldSize</Item>
+      <Item Name="[ByteOffset]">ByteOffset</Item>
+      <Item Name="[ByteMask]">ByteMask</Item>
+      <Item Name="[FieldMask]">FieldMask</Item>
+    </Expand>
+  </Type>
+
+  <!-- FArrayProperty -->
+  <Type Name="RC::Unreal::FArrayProperty">
+    <DisplayString>{NamePrivate} (FArrayProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[Inner]">Inner</Item>
+    </Expand>
+  </Type>
+
+  <!-- FMapProperty -->
+  <Type Name="RC::Unreal::FMapProperty">
+    <DisplayString>{NamePrivate} (FMapProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[KeyProp]">KeyProp</Item>
+      <Item Name="[ValueProp]">ValueProp</Item>
+    </Expand>
+  </Type>
+
+  <!-- FStructProperty -->
+  <Type Name="RC::Unreal::FStructProperty">
+    <DisplayString>{NamePrivate} (FStructProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[Struct]">Struct</Item>
+    </Expand>
+  </Type>
+
+  <!-- FObjectProperty -->
+  <Type Name="RC::Unreal::FObjectProperty">
+    <DisplayString>{NamePrivate} (FObjectProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[PropertyClass]">PropertyClass</Item>
+    </Expand>
+  </Type>
+
+  <!-- FClassProperty -->
+  <Type Name="RC::Unreal::FClassProperty">
+    <DisplayString>{NamePrivate} (FClassProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[MetaClass]">MetaClass</Item>
+    </Expand>
+  </Type>
+
+  <!-- FEnumProperty -->
+  <Type Name="RC::Unreal::FEnumProperty">
+    <DisplayString>{NamePrivate} (FEnumProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[Enum]">Enum</Item>
+      <Item Name="[UnderlyingProp]">UnderlyingProp</Item>
+    </Expand>
+  </Type>
+
+  <!-- FDelegateProperty -->
+  <Type Name="RC::Unreal::FDelegateProperty">
+    <DisplayString>{NamePrivate} (FDelegateProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[SignatureFunction]">SignatureFunction</Item>
+    </Expand>
+  </Type>
+
+  <!-- FMulticastDelegateProperty -->
+  <Type Name="RC::Unreal::FMulticastDelegateProperty">
+    <DisplayString>{NamePrivate} (FMulticastDelegateProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[SignatureFunction]">SignatureFunction</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Numeric Properties ==================== -->
+
+  <!-- FByteProperty -->
+  <Type Name="RC::Unreal::FByteProperty">
+    <DisplayString>{NamePrivate} (FByteProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[Enum]">Enum</Item>
+    </Expand>
+  </Type>
+
+  <!-- FNumericProperty (base for int/float types) -->
+  <Type Name="RC::Unreal::FNumericProperty">
+    <DisplayString>{NamePrivate} (FNumericProperty)</DisplayString>
+    <Expand>
+      <Item Name="[Name]">NamePrivate</Item>
+      <Item Name="[Offset]">Offset_Internal</Item>
+      <Item Name="[ElementSize]">ElementSize</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==================== Frame/Execution Types ==================== -->
+
+  <!-- FFrame -->
+  <Type Name="RC::Unreal::FFrame">
+    <DisplayString>FFrame (Node={Node}, Object={Object})</DisplayString>
+    <Expand>
+      <Item Name="[Node]">Node</Item>
+      <Item Name="[Object]">Object</Item>
+      <Item Name="[Code]">Code</Item>
+      <Item Name="[Locals]">Locals</Item>
+    </Expand>
+  </Type>
+
+  <!-- FOutParmRec -->
+  <Type Name="RC::Unreal::FOutParmRec">
+    <DisplayString>FOutParmRec (Property={Property})</DisplayString>
+    <Expand>
+      <Item Name="[Property]">Property</Item>
+      <Item Name="[PropAddr]">PropAddr</Item>
+      <Item Name="[NextOutParm]">NextOutParm</Item>
+    </Expand>
+  </Type>
+
+</AutoVisualizer>

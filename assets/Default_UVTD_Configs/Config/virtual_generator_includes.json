@@ -1,0 +1,20 @@
+[
+  "UObject",
+  "UEngine",
+  "CoreUObject/UObject/Class",
+  "FOutputDevice",
+  "FField",
+  "CoreUObject/UObject/UnrealType",
+  "Property/FEnumProperty",
+  "Property/FFieldPathProperty",
+  "World",
+  "FWorldContext",
+  "FArchive",
+  "AGameModeBase",
+  "AGameMode",
+  "UPlayer",
+  "ULocalPlayer",
+  "ITextData",
+  "UGameViewportClient",
+  "Engine/UDataTable"
+]

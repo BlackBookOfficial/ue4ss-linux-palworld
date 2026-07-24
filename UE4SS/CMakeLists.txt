@@ -1,0 +1,207 @@
+cmake_minimum_required(VERSION 3.22)
+project(UE4SS)
+
+message("Configuring UE4SS")
+
+# Add proxy generator subproject
+add_subdirectory("proxy_generator")
+
+# Release settings
+option(UE4SS_LIB_BETA_IS_STARTED "Have beta releases started for the current major version" ON)
+option(UE4SS_LIB_IS_BETA "Is this a beta release" ON)
+
+# Define generated directories
+set(UE4SS_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated_include")
+set(UE4SS_GENERATED_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated_src")
+
+# ---------------------------------------------------------------------------
+# Version Information
+# ---------------------------------------------------------------------------
+
+# Read version from file
+file(READ ${UE4SS_GENERATED_SOURCE_DIR}/version.cache UE4SS_LIB_VERSION)
+string(REGEX MATCHALL "([0-9]+).([0-9]+).([0-9]+).([0-9]+).([0-9]+)" VERSION_PARTS "${UE4SS_LIB_VERSION}")
+set(UE4SS_LIB_VERSION_MAJOR ${CMAKE_MATCH_1})
+set(UE4SS_LIB_VERSION_MINOR ${CMAKE_MATCH_2})
+set(UE4SS_LIB_VERSION_HOTFIX ${CMAKE_MATCH_3})
+set(UE4SS_LIB_VERSION_PRERELEASE ${CMAKE_MATCH_4})  # Publicly available pre-release
+set(UE4SS_LIB_VERSION_BETA ${CMAKE_MATCH_5})  # Pre-pre-release version
+
+# Get Git SHA
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        RESULT_VARIABLE GIT_RESULT
+        OUTPUT_VARIABLE UE4SS_LIB_BUILD_GITSHA
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT GIT_RESULT EQUAL 0)
+        set(UE4SS_LIB_BUILD_GITSHA "unknown")
+    endif()
+else()
+    set(UE4SS_LIB_BUILD_GITSHA "no-git")
+endif()
+
+message("UE4SS Version: ${UE4SS_LIB_VERSION_MAJOR}.${UE4SS_LIB_VERSION_MINOR}.${UE4SS_LIB_VERSION_HOTFIX}.${UE4SS_LIB_VERSION_PRERELEASE}.${UE4SS_LIB_VERSION_BETA} (${UE4SS_LIB_BUILD_GITSHA})")
+
+# ---------------------------------------------------------------------------
+# Target Configuration
+# ---------------------------------------------------------------------------
+
+# Find source files
+file(GLOB_RECURSE UE4SS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/**.cpp")
+file(GLOB_RECURSE UE4SS_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include/**.hpp")
+
+# Filter out GUI sources when GUI is disabled
+if(NOT UE4SS_GUI_ENABLED)
+    list(FILTER UE4SS_SOURCES EXCLUDE REGEX "/GUI/")
+    list(FILTER UE4SS_HEADERS EXCLUDE REGEX "/GUI/")
+endif()
+
+# Filter out Input sources when Input is disabled
+if(NOT UE4SS_INPUT_ENABLED)
+    list(FILTER UE4SS_SOURCES EXCLUDE REGEX "/Input/")
+    list(FILTER UE4SS_HEADERS EXCLUDE REGEX "/Input/")
+endif()
+
+# Filter out Windows-only entry point on Linux
+if(NOT WIN32)
+    list(FILTER UE4SS_SOURCES EXCLUDE REGEX "main_ue4ss_rewritten")
+    # Filter out Windows-only GUI backends
+    list(FILTER UE4SS_SOURCES EXCLUDE REGEX "/GUI/DX11\\.cpp$")
+    list(FILTER UE4SS_SOURCES EXCLUDE REGEX "/GUI/Windows\\.cpp$")
+endif()
+
+# Create the main library
+add_library(UE4SS SHARED ${UE4SS_SOURCES})
+
+# Set C++23 standard 
+target_compile_features(UE4SS PUBLIC cxx_std_23)
+
+# Add include directories
+target_include_directories(UE4SS PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/generated_include>
+)
+
+# Add version definitions with PUBLIC visibility so external consumers get them
+target_compile_definitions(UE4SS PUBLIC
+    UE4SS_LIB_VERSION_MAJOR=${UE4SS_LIB_VERSION_MAJOR}
+    UE4SS_LIB_VERSION_MINOR=${UE4SS_LIB_VERSION_MINOR}
+    UE4SS_LIB_VERSION_HOTFIX=${UE4SS_LIB_VERSION_HOTFIX}
+    UE4SS_LIB_VERSION_PRERELEASE=${UE4SS_LIB_VERSION_PRERELEASE}
+    UE4SS_LIB_VERSION_BETA=${UE4SS_LIB_VERSION_BETA}
+    UE4SS_LIB_BETA_STARTED=$<BOOL:${UE4SS_LIB_BETA_IS_STARTED}>
+    UE4SS_LIB_IS_BETA=$<BOOL:${UE4SS_LIB_IS_BETA}>
+    UE4SS_LIB_BUILD_GITSHA="${UE4SS_LIB_BUILD_GITSHA}"
+    UE4SS_CONFIGURATION="$<CONFIG>"
+)
+
+# On Linux, TCHAR is char16_t so we need STR to produce char16_t strings
+if(NOT WIN32)
+    target_compile_definitions(UE4SS PUBLIC FORCE_U16)
+endif()
+
+# Add headers as sources for IDE integration
+target_sources(UE4SS PUBLIC
+    FILE_SET ue4ss_headers TYPE HEADERS
+    BASE_DIRS include
+    FILES ${UE4SS_HEADERS}
+)
+
+# Organize in IDE
+source_group(TREE "${CMAKE_CURRENT_LIST_DIR}" FILES ${UE4SS_SOURCES} ${UE4SS_HEADERS})
+
+# Add natvis file for Visual Studio debugging (works with MSVC and clang-cl)
+if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    target_sources(UE4SS PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../UE4SS.natvis>
+    )
+endif()
+
+# First party static build definitions
+target_compile_definitions(UE4SS PRIVATE
+    RC_UE4SS_EXPORTS
+    RC_ASM_HELPER_BUILD_STATIC
+    RC_FILE_BUILD_STATIC
+    RC_DYNAMIC_OUTPUT_BUILD_STATIC
+    RC_SINGLE_PASS_SIG_SCANNER_BUILD_STATIC
+    RC_SINGLE_PASS_SIG_SCANNER_STATIC
+    RC_UNREAL_BUILD_STATIC
+    RC_INPUT_BUILD_STATIC
+    RC_LUA_MADE_SIMPLE_BUILD_STATIC
+    RC_FUNCTION_TIMER_BUILD_STATIC
+    RC_PARSER_BASE_BUILD_STATIC
+    RC_INI_PARSER_BUILD_STATIC
+    RC_JSON_BUILD_STATIC
+    RC_JSON_PARSER_BUILD_STATIC
+    RC_LUA_WRAPPER_GENERATOR_BUILD_STATIC
+)
+
+# Suppress GCC 15 -Wchanges-meaning warning (member variables with same name as type)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(UE4SS PRIVATE -Wno-changes-meaning -Wno-template-body)
+endif()
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+
+# Link first-party dependencies
+target_link_libraries(UE4SS PUBLIC
+    File glaze::glaze DynamicOutput
+    Unreal SinglePassSigScanner LuaMadeSimple
+    Function IniParser JSON
+    Input Constructs Helpers
+    MProgram ScopedTimer Profiler
+)
+
+# Link third-party dependencies - platform specific
+if(WIN32)
+    target_link_libraries(UE4SS PUBLIC
+        fmt ImGui PolyHook_2
+        d3d11 glfw glad opengl32
+        dbghelp psapi ws2_32 ntdll userenv
+    )
+else()
+    target_link_libraries(UE4SS PUBLIC
+        fmt
+        funchook
+        dl
+        pthread
+    )
+    if(DEFINED funchook_SOURCE_DIR)
+        target_include_directories(UE4SS PUBLIC ${funchook_SOURCE_DIR}/include)
+    endif()
+    if(UE4SS_GUI_ENABLED)
+        target_link_libraries(UE4SS PUBLIC ImGui glfw glad)
+        find_package(OpenGL REQUIRED)
+        target_link_libraries(UE4SS PUBLIC OpenGL::GL)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Output Configuration
+# ---------------------------------------------------------------------------
+
+# Enable link-time optimization
+set_property(TARGET UE4SS PROPERTY INTERPROCEDURAL_OPTIMIZATION ON)
+
+# Set runtime library to dynamic CRT (/MD, /MDd)
+# This matches Visual Studio's default, so external mods don't need to set it explicitly.
+if(MSVC)
+    set_property(TARGET UE4SS PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
+# Set output name and standard
+set_target_properties(UE4SS PROPERTIES 
+    OUTPUT_NAME "UE4SS"
+    CXX_STANDARD 23
+)
+
+# Use the organize_targets function from IDEOrganization.cmake
+# The organize_special_targets function will also handle this target
+organize_targets("^UE4SS$" "RE-UE4SS")

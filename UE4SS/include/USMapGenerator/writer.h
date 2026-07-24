@@ -1,0 +1,165 @@
+#pragma once
+
+#include <cstring>
+
+#include <DynamicOutput/DynamicOutput.hpp>
+#include <Helpers/String.hpp>
+
+#pragma warning(disable: 4068)
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-variable"
+
+class IBufferWriter
+{
+public:
+
+    virtual FORCEINLINE void WriteString(std::string String) = 0;
+    virtual FORCEINLINE void WriteString(std::string_view String) = 0;
+    virtual FORCEINLINE void Write(void* Input, size_t Size) = 0;
+    virtual FORCEINLINE void Seek(int Pos, int Origin = SEEK_CUR) = 0;
+    virtual uint32_t Size() = 0;
+};
+
+class StreamWriter : IBufferWriter
+{
+    std::stringstream m_Stream;
+
+public:
+
+    virtual ~StreamWriter()
+    {
+        m_Stream.flush();
+    }
+
+    FORCEINLINE std::stringstream& GetBuffer()
+    {
+        return m_Stream;
+    }
+
+    FORCEINLINE void WriteString(std::string String) override
+    {
+        m_Stream.write(String.c_str(), String.size());
+    }
+
+    FORCEINLINE void WriteString(std::string_view String) override
+    {
+        m_Stream.write(String.data(), String.size());
+    }
+
+    FORCEINLINE void Write(void* Input, size_t Size) override
+    {
+        m_Stream.write((char*)Input, Size);
+    }
+
+    FORCEINLINE void Seek(int Pos, int Origin = SEEK_CUR) override
+    {
+        std::ios_base::seekdir dir;
+        switch (Origin)
+        {
+        case SEEK_SET: dir = std::ios_base::beg; break;
+        case SEEK_END: dir = std::ios_base::end; break;
+        default: dir = std::ios_base::cur; break;
+        }
+        m_Stream.seekp(Pos, dir);
+    }
+
+    uint32_t Size() override
+    {
+        auto pos = m_Stream.tellp();
+        this->Seek(0, SEEK_END);
+        auto ret = m_Stream.tellp();
+        this->Seek(pos, SEEK_SET);
+
+        return ret;
+    }
+
+    template <typename T>
+    FORCEINLINE void Write(T Input)
+    {
+        Write(&Input, sizeof(T));
+    }
+};
+
+class FileWriter : IBufferWriter
+{
+    FILE* m_File;
+
+public:
+
+    FileWriter(const char* FileName)
+    {
+        m_File = fopen(FileName, "wb");
+        if (!m_File)
+        {
+            RC::Output::send<RC::LogLevel::Error>(STR("Unable to open file for writing: '{}': {}\n"), RC::ensure_str(FileName), RC::ensure_str(std::strerror(errno)));
+        }
+    }
+
+    virtual ~FileWriter()
+    {
+        if (m_File)
+        {
+            std::fclose(m_File);
+        }
+    }
+
+    FORCEINLINE void WriteString(std::string String) override
+    {
+        if (!m_File)
+        {
+            return;
+        }
+        std::fwrite(String.c_str(), String.length(), 1, m_File);
+    }
+
+    FORCEINLINE void WriteString(std::string_view String) override
+    {
+        if (!m_File)
+        {
+            return;
+        }
+        std::fwrite(String.data(), String.size(), 1, m_File);
+    }
+
+    FORCEINLINE void Write(void* Input, size_t Size) override
+    {
+        if (!m_File)
+        {
+            return;
+        }
+        std::fwrite(Input, Size, 1, m_File);
+    }
+
+    FORCEINLINE void Seek(int Pos, int Origin = SEEK_CUR) override
+    {
+        if (!m_File)
+        {
+            return;
+        }
+        std::fseek(m_File, Pos, Origin);
+    }
+
+    uint32_t Size() override
+    {
+        if (!m_File)
+        {
+            return 0;
+        }
+        auto pos = std::ftell(m_File);
+        std::fseek(m_File, 0, SEEK_END);
+        auto ret = std::ftell(m_File);
+        std::fseek(m_File, pos, SEEK_SET);
+        return ret;
+    }
+
+    template <typename T>
+    FORCEINLINE void Write(T Input)
+    {
+        Write(&Input, sizeof(T));
+    }
+};
+
+#pragma clang diagnostic pop
+
+#pragma warning(default: 4068)

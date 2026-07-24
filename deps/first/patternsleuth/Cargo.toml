@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "patternsleuth",
+    "patternsleuth_cli",
+    "patternsleuth_scanner",
+    "examples/*",
+]
+default-members = ["patternsleuth_*"]
+
+[workspace.package]
+repository = "https://github.com/trumank/patternsleuth"
+authors = [ "trumank" ]
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+incremental = true
+debug = true
+
+[workspace.dependencies]
+anyhow = "1.0.79"
+clap = { version = "4.4.14", features = ["derive"] }
+colored = "2.1.0"
+globset = "0.4.14"
+iced-x86 = "1.20.0"
+itertools = "0.12.0"
+memchr = "2.7.1"
+msvc-demangler = "0.9.0"
+object = "0.32.2"
+pdb = "0.8.0"
+prettytable-rs = "0.10.0"
+rayon = "1.8.0"
+regex = "1.10.2"
+serde = "1.0.195"
+strum = {version = "0.25.0", features = ["strum_macros", "derive"]}
+windows = { version = "0.52.0" }

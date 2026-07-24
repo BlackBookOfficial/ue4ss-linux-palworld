@@ -1,0 +1,280 @@
+#pragma once
+
+#include <chrono>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <filesystem>
+
+#include <Common.hpp>
+#include <File/File.hpp>
+#include <LuaMadeSimple/LuaMadeSimple.hpp>
+#include <Mod/Mod.hpp>
+#include <SettingsManager.hpp>
+
+#include <String/StringType.hpp>
+
+#include <Unreal/NameTypes.hpp>
+
+namespace RC
+{
+    class UE4SSProgram;
+
+    namespace Unreal
+    {
+        class UClass;
+    }
+
+    RC_UE4SS_API auto get_mod_ref(const LuaMadeSimple::Lua& lua) -> class LuaMod*;
+
+    class LuaMod : public Mod
+    {
+      private:
+        std::filesystem::path m_scripts_path;
+        LuaMadeSimple::Lua& m_lua;
+
+      public:
+        LuaMadeSimple::Lua* m_hook_lua = nullptr;
+        LuaMadeSimple::Lua* m_main_lua{};
+        LuaMadeSimple::Lua* m_async_lua{};
+
+      public:
+        enum class ActionType
+        {
+            Immediate,
+            Delayed,
+            Loop
+        };
+
+        struct SimpleLuaAction
+        {
+            const LuaMadeSimple::Lua* lua;
+            int32_t lua_action_function_ref{};
+            int32_t lua_action_thread_ref{};
+        };
+
+        // Status of a delayed action (mirrors UE's ETimerStatus)
+        enum class DelayedActionStatus : uint8_t
+        {
+            Pending,        // Created but not yet started
+            Active,         // Running, waiting for delay to expire
+            Paused,         // Timer paused, will resume when unpaused
+            Executing,      // Currently executing callback
+            PendingRemoval  // Marked for removal, will be cleaned up
+        };
+
+        struct DelayedGameThreadAction
+        {
+            const LuaMadeSimple::Lua* lua;
+            int32_t lua_action_function_ref{};
+            int32_t lua_action_thread_ref{};
+            GameThreadExecutionMethod method{GameThreadExecutionMethod::EngineTick};
+            DelayedActionStatus status{DelayedActionStatus::Active};
+            std::chrono::steady_clock::time_point execute_at{};  // Absolute time when action should execute
+            int64_t time_remaining_ms{0};  // Time remaining when paused (milliseconds)
+            int64_t frames_remaining{0};  // Countdown for frame-based delays
+            int64_t delay_ms{0};  // Original delay in milliseconds (for loop/reset)
+            int64_t delay_frames{0};  // Original delay in frames (0 means use time-based delay)
+            int64_t handle{0};  // Unique handle for this action
+            bool is_retriggerable{false};  // If true, can be reset by calling with same handle
+            bool is_looping{false};  // If true, re-schedule after each execution
+            bool pause_after_execution{false};  // Pause immediately after current callback returns
+        };
+
+        static inline int64_t m_next_delayed_action_handle{1};
+
+        struct AsyncAction
+        {
+            // TODO: Use LuaMadeSimple instead of lua_State*
+            // Not doing it now because the copy constructor gets implicitly deleted which is needed for erase & remove_if
+            // lua_State* lua_state;
+            int32_t lua_action_function_ref{};
+            ActionType type{};
+            std::chrono::time_point<std::chrono::steady_clock> created_at{};
+            int64_t delay{};
+        };
+        std::vector<AsyncAction> m_pending_actions{};
+        std::vector<AsyncAction> m_delayed_actions{};
+
+        struct SharedLuaVariable
+        {
+            struct UserdataContainer
+            {
+                void* userdata;
+            };
+            int lua_type{LUA_TNIL};
+            void* value{};
+            bool is_integer{}; // Is true if lua_isinteger returned true when this variable was shared.
+        };
+        struct LuaCallbackData
+        {
+            struct RegistryIndex
+            {
+                int32_t lua_index{};
+                int32_t identifier{};
+            };
+            const LuaMadeSimple::Lua* lua;
+            Unreal::UClass* instance_of_class;
+            std::vector<std::pair<const LuaMadeSimple::Lua*, RegistryIndex>> registry_indexes;
+            bool scheduled_for_removal{};
+        };
+        struct LuaCancellableCallbackData
+        {
+            uint64_t callback_id{};
+            const LuaMadeSimple::Lua* lua;
+            Unreal::FName instance_class_name{};
+            Unreal::FName instance_class_outer_name{};
+            int32_t lua_callback_function_ref{};
+            int32_t lua_callback_thread_ref{};
+        };
+        // Pending NotifyOnNewObject callback to be executed on game thread
+        // StaticConstructObject can be called from any thread (loading threads, etc.)
+        // but Lua is NOT thread-safe, so we must defer Lua calls to the game thread
+        struct PendingNotifyOnNewObjectCallback
+        {
+            uint64_t callback_id{}; // Stable ID for matching callback safely
+            int32_t object_index{}; // UObject internal index
+            int32_t object_serial{}; // Serial number for validity checks
+        };
+        struct FunctionHookData
+        {
+            std::vector<Unreal::FName> names{};
+            LuaCallbackData callback_data{};
+        };
+        static inline std::vector<LuaCancellableCallbackData> m_static_construct_object_lua_callbacks;
+        static inline uint64_t m_next_static_construct_callback_id{1};
+        static inline std::vector<LuaCallbackData> m_process_console_exec_pre_callbacks;
+        static inline std::vector<LuaCallbackData> m_process_console_exec_post_callbacks;
+        static inline std::vector<LuaCallbackData> m_call_function_by_name_with_arguments_pre_callbacks;
+        static inline std::vector<LuaCallbackData> m_call_function_by_name_with_arguments_post_callbacks;
+        static inline std::vector<LuaCallbackData> m_local_player_exec_pre_callbacks;
+        static inline std::vector<LuaCallbackData> m_local_player_exec_post_callbacks;
+        static inline std::unordered_map<File::StringType, LuaCallbackData> m_global_command_lua_callbacks;
+        static inline std::unordered_map<File::StringType, LuaCallbackData> m_custom_command_lua_pre_callbacks;
+        static inline std::vector<SimpleLuaAction> m_game_thread_actions{};
+        static inline std::vector<SimpleLuaAction> m_engine_tick_actions{};
+        static inline std::vector<DelayedGameThreadAction> m_delayed_game_thread_actions{};
+        // Pending queues for actions registered during iteration (prevents iterator invalidation)
+        static inline std::vector<SimpleLuaAction> m_pending_game_thread_actions{};
+        static inline std::vector<SimpleLuaAction> m_pending_engine_tick_actions{};
+        static inline std::vector<DelayedGameThreadAction> m_pending_delayed_game_thread_actions{};
+        // Pending NotifyOnNewObject callbacks to be processed on game thread
+        static inline std::vector<PendingNotifyOnNewObjectCallback> m_pending_notify_on_new_object_callbacks{};
+        // Flag to track if we're currently iterating over action vectors
+        static inline bool m_is_processing_actions{};
+        static inline GameThreadExecutionMethod m_default_game_thread_method{GameThreadExecutionMethod::EngineTick};
+        // This is storage that persists through hot-reloads.
+        static inline std::unordered_map<std::string, SharedLuaVariable> m_shared_lua_variables{};
+        static inline std::vector<FunctionHookData> m_custom_event_callbacks{};
+        static inline std::vector<LuaCallbackData> m_load_map_pre_callbacks{};
+        static inline std::vector<LuaCallbackData> m_load_map_post_callbacks{};
+        static inline std::vector<LuaCallbackData> m_init_game_state_pre_callbacks{};
+        static inline std::vector<LuaCallbackData> m_init_game_state_post_callbacks{};
+        static inline std::vector<LuaCallbackData> m_begin_play_pre_callbacks{};
+        static inline std::vector<LuaCallbackData> m_begin_play_post_callbacks{};
+        static inline std::vector<LuaCallbackData> m_end_play_pre_callbacks{};
+        static inline std::vector<LuaCallbackData> m_end_play_post_callbacks{};
+        static inline std::vector<FunctionHookData> m_script_hook_callbacks{};
+        static inline bool m_is_currently_executing_game_action{};
+        static inline std::recursive_mutex m_thread_actions_mutex{};
+
+      private:
+        std::jthread m_async_thread;
+        std::thread::id m_main_thread_id{};
+        bool m_processing_events{};
+        bool m_pause_events_processing{};
+        bool m_is_process_event_hooked{};
+        static inline bool m_is_engine_tick_hooked{};
+        std::mutex m_actions_lock{};
+
+      public:
+        LuaMod(UE4SSProgram&, StringType&& mod_name, StringType&& mod_path);
+        ~LuaMod() override = default;
+
+      private:
+        auto start_async_thread() -> void
+        {
+            m_async_thread = std::jthread{&Mod::update_async, this};
+        }
+
+      private:
+        static auto ensure_engine_tick_hooked() -> void;
+        static auto ensure_process_event_hooked(LuaMod* mod) -> void;
+
+        static auto custom_module_searcher(lua_State* L) -> int;
+        static auto custom_dofile(lua_State* L) -> int;
+        static auto custom_loadfile(lua_State* L) -> int;
+        auto setup_custom_module_loader(const LuaMadeSimple::Lua* lua_state) -> void;
+        auto load_and_execute_script(const std::filesystem::path& script_path) -> bool;
+        auto setup_lua_require_paths(const LuaMadeSimple::Lua& lua) const -> void;
+        auto setup_lua_global_functions(const LuaMadeSimple::Lua& lua) const -> void;
+        auto setup_lua_global_functions_main_state_only() const -> void;
+        auto setup_lua_classes(const LuaMadeSimple::Lua& lua) const -> void;
+        auto fire_on_lua_start_for_cpp_mods() -> void;
+        auto fire_on_lua_stop_for_cpp_mods() -> void;
+
+      public:
+        auto start_mod() -> void override;
+        auto uninstall() -> void override;
+
+        auto prepare_mod(const LuaMadeSimple::Lua& lua) -> void;
+
+        RC_UE4SS_API auto lua() const -> const LuaMadeSimple::Lua&;
+        RC_UE4SS_API auto main_lua() const -> const LuaMadeSimple::Lua*;
+        RC_UE4SS_API auto async_lua() const -> const LuaMadeSimple::Lua*;
+        RC_UE4SS_API auto get_lua_state() const -> lua_State*;
+
+        RC_UE4SS_API auto get_scripts_path() const -> const std::filesystem::path& { return m_scripts_path; }
+
+        RC_UE4SS_API auto actions_lock() -> void
+        {
+            m_actions_lock.lock();
+        }
+        RC_UE4SS_API auto actions_unlock() -> void
+        {
+            m_actions_lock.unlock();
+        }
+
+        [[nodiscard]] RC_UE4SS_API auto get_async_thread_id() const -> std::thread::id
+        {
+            return m_async_thread.get_id();
+        }
+
+        [[nodiscard]] RC_UE4SS_API auto get_main_thread_id() const -> std::thread::id
+        {
+            return m_main_thread_id;
+        }
+
+      public:
+        // Called once when the program is starting, after mods are setup but before any mods have been started
+        auto static on_program_start() -> void;
+
+        auto static global_uninstall() -> void;
+
+        // Async update
+        // Used when the main update function would block other mods from executing their scripts
+        auto update_async() -> void override;
+
+        auto process_delayed_actions() -> void;
+        auto clear_delayed_actions() -> void;
+
+      public:
+        static auto get_object_names(const Unreal::UObject*) -> std::vector<Unreal::FName>;
+        static auto find_function_hook_data(std::vector<FunctionHookData>&, Unreal::FName) -> FunctionHookData*;
+        static auto find_function_hook_data(std::vector<FunctionHookData>&, const Unreal::UObject*) -> FunctionHookData*;
+        static auto find_function_hook_data(std::vector<FunctionHookData>&, const std::vector<Unreal::FName>&) -> FunctionHookData*;
+        static auto remove_function_hook_data(std::vector<FunctionHookData>&, StringViewType) -> void;
+        static auto remove_function_hook_data(std::vector<FunctionHookData>&, Unreal::FName) -> void;
+        static auto remove_function_hook_data(std::vector<FunctionHookData>&, const Unreal::UObject*) -> void;
+        static auto remove_function_hook_data(std::vector<FunctionHookData>&, const std::vector<Unreal::FName>&) -> void;
+    };
+
+    struct LuaStatics
+    {
+        // Lua instance connected to the in-game console.
+        static LuaMadeSimple::Lua* console_executor;
+        static bool console_executor_enabled;
+    };
+} // namespace RC

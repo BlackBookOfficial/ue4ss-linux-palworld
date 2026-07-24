@@ -1,0 +1,151 @@
+#include <GUI/GLFW3_OpenGL3.hpp>
+
+#include <cstdlib>
+#include <stdexcept>
+
+#include <UE4SSDebug.hpp>
+
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+#include <glad/glad.h>
+
+#include <backends/imgui_impl_glfw.h>
+#include <backends/imgui_impl_opengl3.h>
+#include <imgui.h>
+#include <UE4SSProgram.hpp>
+
+namespace RC::GUI
+{
+    static void glfw_error_callback(int error, const char* description)
+    {
+        Output::send<LogLevel::Error>(STR("Glfw Error {}: {}\n"), error, ensure_str(description));
+    }
+
+    auto Backend_GLFW3_OpenGL3::init() -> void
+    {
+        // Setup window
+        glfwSetErrorCallback(glfw_error_callback);
+        if (!glfwInit())
+        {
+            throw std::runtime_error{"Was unable to initialize glfw"};
+        }
+
+        // GL 3.2 + GLSL 150
+        const char* glsl_version = "#version 150";
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); // 3.2+ only
+
+        // Headless mode: when no display server is available (Linux server),
+        // use EGL context creation API and create a hidden window.
+        // This allows the GUI to render off-screen on headless servers.
+        // For interactive use, run with Xvfb: `xvfb-run -a ./game-server`
+        // Or set DISPLAY=:0 if an X server is available.
+        bool headless = false;
+#ifndef _WIN32
+        if (std::getenv("DISPLAY") == nullptr)
+        {
+            headless = true;
+            glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
+            glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+            UE4SS_DBG("[UE4SS] GUI: headless mode (no DISPLAY, using EGL + hidden window)\n");
+        }
+#endif
+
+        // Create window with graphics context
+        auto window_title = fmt::format("UE4SS Debugging Tools (OpenGL 3) - {}", render_mode_to_string(UE4SSProgram::settings_manager.Debug.RenderMode));
+        m_window = glfwCreateWindow(1280, 800, window_title.c_str(), NULL, NULL);
+        if (m_window == NULL)
+        {
+            throw std::runtime_error{"Was unable to create glfw window"};
+        }
+        glfwMakeContextCurrent(m_window);
+        glfwSwapInterval(1); // Enable vsync
+
+        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+        {
+            throw std::runtime_error{"Was unable to initialize glad"};
+        }
+
+        int left, top, right, bottom;
+        glfwGetWindowFrameSize(m_window, &left, &top, &right, &bottom);
+        glfwSetWindowSize(m_window, 1280 - left - right, 800 - top - bottom);
+
+        ImGui_ImplGlfw_InitForOpenGL(m_window, true);
+        ImGui_ImplOpenGL3_Init(glsl_version);
+    }
+
+    auto Backend_GLFW3_OpenGL3::imgui_backend_newframe() -> void
+    {
+        glfwPollEvents();
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+    }
+
+    auto Backend_GLFW3_OpenGL3::render(const float clear_color_with_alpha[4]) -> void
+    {
+        ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+
+        int display_w, display_h;
+        glfwGetFramebufferSize(m_window, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
+        glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        glfwSwapBuffers(m_window);
+    }
+
+    auto Backend_GLFW3_OpenGL3::shutdown() -> void
+    {
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+    }
+
+    auto Backend_GLFW3_OpenGL3::cleanup() -> void
+    {
+        glfwDestroyWindow(m_window);
+        glfwTerminate();
+    }
+
+    auto Backend_GLFW3_OpenGL3::create_device() -> bool
+    {
+        return false;
+    }
+
+    auto Backend_GLFW3_OpenGL3::cleanup_device() -> void
+    {
+    }
+
+    auto Backend_GLFW3_OpenGL3::handle_window_resize(int64_t param_1, int64_t param_2) -> void
+    {
+    }
+
+    auto Backend_GLFW3_OpenGL3::on_os_backend_set() -> void
+    {
+    }
+
+    auto Backend_GLFW3_OpenGL3::get_window_size() -> WindowSize
+    {
+        int left, top, right, bottom;
+        glfwGetWindowFrameSize(m_window, &left, &top, &right, &bottom);
+
+        int w, h;
+        glfwGetWindowSize(m_window, &w, &h);
+        return {w + left + right, h + top + bottom};
+    }
+
+    auto Backend_GLFW3_OpenGL3::get_window_position() -> WindowPosition
+    {
+        int left, top, right, bottom;
+        glfwGetWindowFrameSize(m_window, &left, &top, &right, &bottom);
+
+        return {left, top};
+    }
+
+    auto Backend_GLFW3_OpenGL3::exit_requested() -> bool
+    {
+        return glfwWindowShouldClose(m_window);
+    }
+} // namespace RC::GUI
