@@ -6499,8 +6499,25 @@ Overloads:
             {
                 return;
             }
+            // Fast path: check if the function's name matches any hook's first name part.
+            // This avoids the expensive get_object_names() vector allocation on every call.
+            // FName::Equals compares ComparisonIndex (single int compare), so this is O(n_hooks).
+            auto func_name = Stack.Node()->GetNamePrivate();
+            bool any_match = false;
+            for (const auto& hook_data : callback_container)
+            {
+                if (hook_data.names.size() >= 1 && func_name.Equals(hook_data.names[0]))
+                {
+                    any_match = true;
+                    break;
+                }
+            }
+            if (!any_match)
+            {
+                return;
+            }
             auto data = precise_name_match ? LuaMod::find_function_hook_data(callback_container, Stack.Node())
-                                           : LuaMod::find_function_hook_data(callback_container, Stack.Node()->GetNamePrivate());
+                                           : LuaMod::find_function_hook_data(callback_container, func_name);
             if (data)
             {
                 const auto& callback_data = data->callback_data;
