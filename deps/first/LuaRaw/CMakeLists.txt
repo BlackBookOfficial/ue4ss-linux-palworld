@@ -75,7 +75,12 @@ target_compile_definitions(${TARGET}
     PUBLIC
         $<$<NOT:$<BOOL:${UE4SS_${TARGET}_BUILD_SHARED}>>:
             RC_${MODULE_NAME}_BUILD_STATIC>
-        $<$<BOOL:${LUA_COMPILE_AS_CPP}>:LUA_COMPILED_AS_CPP>)
+        $<$<BOOL:${LUA_COMPILE_AS_CPP}>:LUA_COMPILED_AS_CPP>
+        # On Linux, libsteam_api.so exports __cxa_throw and __gxx_personality_v0,
+        # which intercept C++ exceptions thrown by Lua's error handling (luaD_throw)
+        # and call abort() instead of letting pcall catch the error.
+        # Using longjmp/setjmp bypasses the C++ exception mechanism entirely.
+        $<$<AND:$<BOOL:${LUA_COMPILE_AS_CPP}>,$<PLATFORM_ID:Linux>>:LUA_USE_LONGJMP>)
             
 # Make headers visible in the IDE
 # Uses make_headers_visible() from cmake/modules/IDEVisibility.cmake
