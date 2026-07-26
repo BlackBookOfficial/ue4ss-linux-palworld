@@ -18,6 +18,7 @@
 #include <Unreal/UObject.hpp>
 #include <Unreal/UEngine.hpp>
 #include <Unreal/CoreUObject/UObject/Class.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/FString.hpp>
 #include <Unreal/FMemory.hpp>
 #include <Unreal/FAssetData.hpp>
@@ -721,11 +722,24 @@ namespace RC::Unreal::UnrealInitializer
                 std::string(exe_path).find("PalServer") != std::string::npos);
             if (is_palworld)
             {
+                // UObject vtable: extra slot between OverridePerObjectConfigSection
+                // and ProcessEvent shifts ProcessEvent and subsequent virtuals by +8.
                 UObject::VTableLayoutMap[STR("ProcessEvent")] = 0x268;
                 UObject::VTableLayoutMap[STR("GetFunctionCallspace")] = 0x270;
                 UObject::VTableLayoutMap[STR("CallRemoteFunction")] = 0x278;
                 UObject::VTableLayoutMap[STR("ProcessConsoleExec")] = 0x280;
-                Output::send(STR("Palworld vtable override: ProcessEvent=0x268 GetFunctionCallspace=0x270 CallRemoteFunction=0x278 ProcessConsoleExec=0x280\n"));
+
+                // FProperty vtable: same pattern — extra slot between
+                // InstanceSubobjects (0x140) and GetMinAlignment (0x148),
+                // shifting GetMinAlignment and subsequent virtuals by +8.
+                // Verified at runtime: vtable[0x148] = ret;int3 (stub),
+                // vtable[0x150] = real function returning alignment (4, 8, etc.).
+                FProperty::VTableLayoutMap[STR("GetMinAlignment")] = 0x150;
+                FProperty::VTableLayoutMap[STR("ContainsObjectReference")] = 0x158;
+                FProperty::VTableLayoutMap[STR("EmitReferenceInfo")] = 0x160;
+                FProperty::VTableLayoutMap[STR("SameType")] = 0x168;
+
+                Output::send(STR("Palworld vtable override: UObject ProcessEvent=0x268, FProperty GetMinAlignment=0x150\n"));
             }
         }
 #endif
