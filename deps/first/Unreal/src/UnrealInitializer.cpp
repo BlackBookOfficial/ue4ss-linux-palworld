@@ -2,6 +2,8 @@
 #include <format>
 #include <thread>
 #include <chrono>
+#include <string>
+#include <unistd.h>
 
 #include <Helpers/Casting.hpp>
 #include <SigScanner/SinglePassSigScanner.hpp>
@@ -690,18 +692,43 @@ namespace RC::Unreal::UnrealInitializer
         InitializeVersionedContainer();
 #ifdef __linux__
         fprintf(stderr, "[UE4SS] ScanGame: InitializeVersionedContainer() done.\n");
-        // Palworld's UE5.1 build has an extra virtual slot in the UObject vtable
-        // (Itanium ABI). The standard UE5.1 layout puts ProcessEvent at 0x260, but
-        // Palworld shifts it to 0x268. This was verified by calling the function at
-        // 0x268 via the KSL CDO's vtable — it correctly converts FName to string.
-        // The function at 0x260 is a no-op stub (ret; int3). Without this fix,
-        // Conv_NameToString returns empty strings, breaking all FName::ToString
-        // calls including GetFullName() used for object lookups.
+        // Palworld-specific vtable override.
         //
-        // ProcessConsoleExec is similarly shifted from 0x278 to 0x280.
-        UObject::VTableLayoutMap[STR("ProcessEvent")] = 0x268;
-        UObject::VTableLayoutMap[STR("ProcessConsoleExec")] = 0x280;
-        fprintf(stderr, "[UE4SS] Palworld vtable fix: ProcessEvent=0x268 ProcessConsoleExec=0x280\n");
+        // Palworld's UE5.1 build has an extra virtual function slot in the UObject
+        // vtable between OverridePerObjectConfigSection (0x258) and ProcessEvent.
+        // The extra slot (at 0x260) is an empty stub (ret; int3). This shifts
+        // ProcessEvent, GetFunctionCallspace, CallRemoteFunction, and
+        // ProcessConsoleExec each by +8 bytes.
+        //
+        // This is NOT an engine-wide Itanium ABI difference — other UObject virtuals
+        // (PostLoad, BeginDestroy, FinishDestroy) are at the standard offsets.
+        // It is a Pocketpair engine modification.
+        //
+        // Evidence:
+        // - vtable[0x260] = ret;int3 (empty stub) — should be ProcessEvent
+        // - vtable[0x268] = push rbp; mov rsp,rbp (real function) — verified as
+        //   ProcessEvent via GDB call: Conv_NameToString(0x1f8) returns "Actor"
+        // - vtable[0x280] = jmp (real function) — ProcessConsoleExec
+        // - PostLoad(0xA0), BeginDestroy(0xB0), FinishDestroy(0xC0) are at
+        //   standard offsets (no shift), confirming this is local to the
+        //   ProcessEvent region.
+        //
+        // Gate: only apply if the game binary is PalServer-Linux-Shipping.
+        {
+            char exe_path[4096];
+            ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+            bool is_palworld = (exe_len > 0 && 
+                std::string(exe_path).find("PalServer") != std::string::npos);
+            if (is_palworld)
+            {
+                UObject::VTableLayoutMap[STR("ProcessEvent")] = 0x268;
+                UObject::VTableLayoutMap[STR("GetFunctionCallspace")] = 0x270;
+                UObject::VTableLayoutMap[STR("CallRemoteFunction")] = 0x278;
+                UObject::VTableLayoutMap[STR("ProcessConsoleExec")] = 0x280;
+                fprintf(stderr, "[UE4SS] Palworld vtable override: ProcessEvent=0x268 "
+                        "GetFunctionCallspace=0x270 CallRemoteFunction=0x278 ProcessConsoleExec=0x280\n");
+            }
+        }
 #endif
 
         // Second pass
