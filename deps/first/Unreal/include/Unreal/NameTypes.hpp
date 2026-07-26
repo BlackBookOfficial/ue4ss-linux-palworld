@@ -36,6 +36,18 @@ namespace RC::Unreal
         FNAME_Replace_Not_Safe_For_Threading
     };
 
+#ifdef __linux__
+    // Forward declaration — native Linux/Palworld name provider (defined in NameTypes.cpp).
+    // Delegates FName(string, FNAME_Find) to the engine's own find-or-add name lookup,
+    // bypassing the (inlined, non-existent) FName constructor symbol.
+    class FName;
+    namespace PalworldNameProvider {
+        using EngineFindNameFn = void (*)(uint64_t*, const char16_t*);
+        auto LocateEngineFindName() -> EngineFindNameFn;
+        auto FindName(const CharType* StrName, EFindName FindType) -> FName;
+    }
+#endif
+
     enum class ENameCase : uint8
     {
         CaseSensitive,
@@ -214,6 +226,9 @@ namespace RC::Unreal
     {
     private:
         friend RC_UE_API auto UnrealInitializer::CreateCache(UnrealInitializer::CacheInfo& Target) -> void;
+#ifdef __linux__
+        friend FName PalworldNameProvider::FindName(const CharType*, EFindName);
+#endif
 
         FNameEntryId ComparisonIndex{};
 #ifdef WITH_CASE_PRESERVING_NAME
@@ -230,7 +245,13 @@ namespace RC::Unreal
     private:
         auto construct_with_string(const CharType* StrName, EFindName FindType, void* FunctionAddressOverride) -> void
         {
-            if (!ConstructorInternal.is_ready() && !FunctionAddressOverride) { return; }
+            if (!ConstructorInternal.is_ready() && !FunctionAddressOverride) 
+            {
+#ifdef __linux__
+                fprintf(stderr, "[UE4SS] construct_with_string: ConstructorInternal NOT ready! StrName=%p fn_addr=%p\n", (void*)StrName, FunctionAddressOverride);
+#endif
+                return; 
+            }
 
             // Assign the temporary address if one exists
             if (FunctionAddressOverride) { ConstructorInternal.assign_temp_address(FunctionAddressOverride); }
@@ -241,6 +262,21 @@ namespace RC::Unreal
             DisplayIndex = Name.DisplayIndex;
 #endif
             Number = Name.Number;
+#ifdef __linux__
+            {
+                static thread_local int s_log_count = 0;
+                if (s_log_count < 20)
+                {
+                    ++s_log_count;
+                    char buf[128] = {};
+                    int k = 0;
+                    if (StrName) { for (; k < 64 && StrName[k]; ++k) { buf[k] = static_cast<char>(StrName[k]); } }
+                    fprintf(stderr, "[UE4SS] construct_with_string: \"%s\" -> cmp=0x%x number=%u (fn_ready=%d)\n",
+                            buf, (unsigned)ComparisonIndex.ToUnstableInt(), (unsigned)Number, (int)ConstructorInternal.is_ready());
+                    fflush(stderr);
+                }
+            }
+#endif
 
             // Reset the address to what it was before it was overridden by a temporary address
             if (FunctionAddressOverride) { ConstructorInternal.reset_address(); }
@@ -303,12 +339,22 @@ namespace RC::Unreal
 
         explicit FName(StringViewType str_name, EFindName FindType = FNAME_Add, void* FunctionAddressOverride = nullptr)
         {
-            construct_with_string(str_name.data(), FindType, FunctionAddressOverride);
+            // string_view::data() is NOT guaranteed to be null-terminated.
+            // The engine's FName constructor (and PalworldNameProvider::FindName on Linux)
+            // scan for a null terminator to determine string length. Passing a
+            // non-null-terminated pointer causes the engine to read past the view
+            // boundary, producing wrong ComparisonIndex values (e.g. reading
+            // "/Script/CoreUObject.Object" instead of "/Script/CoreUObject").
+            // Create a null-terminated copy on the stack.
+            StringType null_terminated(str_name);
+            construct_with_string(null_terminated.c_str(), FindType, FunctionAddressOverride);
         }
 
         explicit FName(StringViewType Name, uint32 InNumber, EFindName FindType = FNAME_Add, void* FunctionAddressOverride = nullptr)
         {
-            construct_with_string(Name.data(), InNumber, FindType, FunctionAddressOverride);
+            // See comment above: string_view::data() is not null-terminated.
+            StringType null_terminated(Name);
+            construct_with_string(null_terminated.c_str(), InNumber, FindType, FunctionAddressOverride);
         }
 
         auto inline operator==(FName other) const -> bool

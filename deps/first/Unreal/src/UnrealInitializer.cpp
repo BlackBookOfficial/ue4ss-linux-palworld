@@ -7,6 +7,7 @@
 #include <SigScanner/SinglePassSigScanner.hpp>
 #include <DynamicOutput/DynamicOutput.hpp>
 #include <Unreal/UnrealInitializer.hpp>
+#include <Unreal/NameTypes.hpp>
 #include <Unreal/VersionedContainer/Container.hpp>
 #include <Unreal/VersionedContainer/UnrealVirtualImpl/UnrealVirtualBaseVC.hpp>
 #include <Unreal/UnrealVersion.hpp>
@@ -689,6 +690,18 @@ namespace RC::Unreal::UnrealInitializer
         InitializeVersionedContainer();
 #ifdef __linux__
         fprintf(stderr, "[UE4SS] ScanGame: InitializeVersionedContainer() done.\n");
+        // Palworld's UE5.1 build has an extra virtual slot in the UObject vtable
+        // (Itanium ABI). The standard UE5.1 layout puts ProcessEvent at 0x260, but
+        // Palworld shifts it to 0x268. This was verified by calling the function at
+        // 0x268 via the KSL CDO's vtable — it correctly converts FName to string.
+        // The function at 0x260 is a no-op stub (ret; int3). Without this fix,
+        // Conv_NameToString returns empty strings, breaking all FName::ToString
+        // calls including GetFullName() used for object lookups.
+        //
+        // ProcessConsoleExec is similarly shifted from 0x278 to 0x280.
+        UObject::VTableLayoutMap[STR("ProcessEvent")] = 0x268;
+        UObject::VTableLayoutMap[STR("ProcessConsoleExec")] = 0x280;
+        fprintf(stderr, "[UE4SS] Palworld vtable fix: ProcessEvent=0x268 ProcessConsoleExec=0x280\n");
 #endif
 
         // Second pass
@@ -767,6 +780,11 @@ namespace RC::Unreal::UnrealInitializer
                     // Remove the hook since it's not firing
                     Hook::Internal::GetDetourInstance<Hook::Internal::EDetourTarget::FNameConstructor>()->RemoveCallback(FNameConstructedHookId);
                     Hook::Internal::GetDetourInstance<Hook::Internal::EDetourTarget::FNameConstructor>()->DeactivateHook();
+                    // The AOB scan likely matched the wrong function (the verification hook
+                    // never fired, meaning this address is not the real FName constructor).
+                    // Reset it so callers fall back to the limited-mode FName path instead of
+                    // calling a wrong address and crashing (signal 11) during StaticFindObject.
+                    FName::ConstructorInternal.reset_address();
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -831,6 +849,26 @@ namespace RC::Unreal::UnrealInitializer
         }
         fprintf(stderr, "[UE4SS] Initialize: GUObjectArray found, proceeding with full post-scan init\n");
 #endif
+#ifdef __linux__
+        // Palworld's optimized Clang/LTO build has no standalone FName(string,
+        // EFindName) constructor symbol — the AOB scan matches a wrong address and
+        // the verification hook never fires, stalling init. Instead, wire
+        // ConstructorInternal to a native backend that delegates to the engine's
+        // own find-or-add name lookup (located via a deterministic signature).
+        // This provides the string->ComparisonIndex primitive that StaticFindObject
+        // needs to resolve KismetStringLibrary -> Conv_NameToString.
+        if (PalworldNameProvider::LocateEngineFindName())
+        {
+            FName::ConstructorInternal.assign_address(PalworldNameProvider::FindName);
+            Output::send(STR("FName constructor wired to native Palworld name provider (engine find-or-add at 0x{:016X})\n"),
+                         std::bit_cast<uintptr_t>(PalworldNameProvider::LocateEngineFindName()));
+            StaticStorage::FNameVerificationStatus.store(true, std::memory_order_release);
+        }
+        else
+        {
+            Output::send<LogLevel::Warning>(STR("Palworld native name provider not located; falling back to AOB/verify path\n"));
+        }
+#endif
         if (!StaticStorage::FNameVerificationStatus.load(std::memory_order_acquire))
         {
             VerifyFNameConstructor();
@@ -852,10 +890,18 @@ namespace RC::Unreal::UnrealInitializer
         {
             auto wait_start = std::chrono::steady_clock::now();
 #ifdef __linux__
-            // On Linux with stripped binaries, GUObjectArray may have very few elements
-            // because the engine hasn't fully initialized yet. Don't block — just proceed.
-            const int32_t min_elements = 0;
-            const int timeout_seconds = 5;
+            // On Linux, UE4SS loads via LD_PRELOAD at process start, before the engine
+            // has populated GUObjectArray. The heuristic scan finds the correct address,
+            // but at this point the array is nearly empty (a handful of objects). We must
+            // wait for the engine to finish its own initialization and populate the array,
+            // otherwise every downstream call (StaticFindObject, hook installation, mod
+            // Lua code that touches UObjects) crashes or aborts (SIGSEGV/SIGABRT).
+            //
+            // Use the same 1000-element threshold the rest of this function uses to
+            // decide between full and "limited" mode, so we only enter limited mode if
+            // the engine genuinely never initializes (e.g. wrong GUObjectArray address).
+            const int32_t min_elements = 1000;
+            const int timeout_seconds = 120;
 #else
             const int32_t min_elements = 10000;
             const int timeout_seconds = 60;
@@ -905,6 +951,9 @@ namespace RC::Unreal::UnrealInitializer
             while (!KismetStringLibrary)
             {
                 KismetStringLibrary = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings({STR("/Script/Engine"), STR("KismetStringLibrary")}));
+#ifdef __linux__
+                fprintf(stderr, "[UE4SS] KSL lookup: result=%p\n", (void*)KismetStringLibrary);
+#endif
                 if (!KismetStringLibrary)
                 {
                     if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - wait_start).count() > 30)
@@ -930,10 +979,19 @@ namespace RC::Unreal::UnrealInitializer
             auto wait_start = std::chrono::steady_clock::now();
             while (!FName::Conv_NameToStringInternal && KismetStringLibrary)
             {
+#ifdef __linux__
+                fprintf(stderr, "[UE4SS] Looking for Conv_NameToString via GetFunctionByName...\n");
+#endif
                 FName::Conv_NameToStringInternal = KismetStringLibrary->GetFunctionByName(FName(STR("Conv_NameToString"), FNAME_Find));
+#ifdef __linux__
+                fprintf(stderr, "[UE4SS] GetFunctionByName result: %p\n", (void*)FName::Conv_NameToStringInternal);
+#endif
                 if (!FName::Conv_NameToStringInternal)
                 {
                     FName::Conv_NameToStringInternal = static_cast<UFunction*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings({STR("/Script/Engine"), STR("KismetStringLibrary"), STR("Conv_NameToString")}));
+#ifdef __linux__
+                    fprintf(stderr, "[UE4SS] StaticFindObject fallback result: %p\n", (void*)FName::Conv_NameToStringInternal);
+#endif
                 }
                 if (!FName::Conv_NameToStringInternal)
                 {
@@ -951,7 +1009,13 @@ namespace RC::Unreal::UnrealInitializer
             auto wait_start = std::chrono::steady_clock::now();
             while (!FName::KismetStringLibraryCDO && KismetStringLibrary)
             {
+#ifdef __linux__
+                fprintf(stderr, "[UE4SS] Calling GetClassDefaultObject() on KSL=0x%lx...\n", (uintptr_t)KismetStringLibrary);
+#endif
                 FName::KismetStringLibraryCDO = KismetStringLibrary->GetClassDefaultObject();
+#ifdef __linux__
+                fprintf(stderr, "[UE4SS] CDO result: %p\n", (void*)FName::KismetStringLibraryCDO);
+#endif
                 if (!FName::KismetStringLibraryCDO)
                 {
                     if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - wait_start).count() > 30)
@@ -963,6 +1027,11 @@ namespace RC::Unreal::UnrealInitializer
                 }
             }
         }
+
+#ifdef __linux__
+        fprintf(stderr, "[UE4SS] KSL setup complete: KSL=%p Conv=%p CDO=%p NumElements=%d\n",
+                (void*)KismetStringLibrary, (void*)FName::Conv_NameToStringInternal, (void*)FName::KismetStringLibraryCDO, (int)UObjectArray::GetNumElements());
+#endif
 
 #ifdef __linux__
         // On Linux with stripped binaries, if GUObjectArray has very few elements,
@@ -1049,13 +1118,22 @@ namespace RC::Unreal::UnrealInitializer
             return Instance;
         };
 
-        auto* Object = UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Default__Object"));
+        auto* Object = static_cast<UObject*>(nullptr);
+#ifdef __linux__
+        // Try the real lookup. Default__Object is the CDO of UObject and is needed to
+        // resolve ProcessEvent. ForEachUObject has per-iteration SIGSEGV recovery,
+        // so stale pointers are skipped rather than crashing the process.
+        Object = UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Default__Object"));
+#endif
         if (!Object)
         {
             Output::send<LogLevel::Warning>(STR("Post-initialization: Was unable to find 'CoreUObject.Default__Object' to use to retrieve the address of ProcessEvent. ProcessEvent hook will not be available.\n"));
         }
 
-        auto* Struct = UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Default__Struct"));
+        auto* Struct = static_cast<UObject*>(nullptr);
+#ifdef __linux__
+        Struct = UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Default__Struct"));
+#endif
         if (!Struct)
         {
             Output::send<LogLevel::Warning>(STR("Post-initialization: Was unable to find 'CoreUObject.Default__Struct' to use to retrieve the address of SetSuperStruct. UStruct::Link hook will not be available.\n"));
@@ -1247,13 +1325,24 @@ namespace RC::Unreal::UnrealInitializer
             }
         }
 
+#ifdef __linux__
+        fprintf(stderr, "[UE4SS] Calling store_all_object_types()...\n");
+#endif
         if (!TypeChecker::store_all_object_types())
         {
             Output::send<LogLevel::Warning>(STR("Warning: TypeChecker was unable to find some or all of the required core objects (continuing in limited mode)\n"));
         }
+#ifdef __linux__
+        fprintf(stderr, "[UE4SS] store_all_object_types() completed\n");
+#endif
 
         if (UnrealConfig.bHookProcessInternal || UnrealConfig.bHookProcessLocalScriptFunction)
         {
+#ifdef __linux__
+            // On Linux, StaticFindObject uses GetFullName() which requires ProcessEvent
+            // (not available on stripped binary). Skip this lookup to avoid crash.
+            Output::send<LogLevel::Warning>(STR("Linux: Skipping ExecuteUbergraph lookup. ProcessInternal hook not available.\n"));
+#else
             auto ExecuteUbergraphFunction = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, STR("/Script/CoreUObject.Object:ExecuteUbergraph"));
             if (!ExecuteUbergraphFunction)
             {
@@ -1314,11 +1403,24 @@ namespace RC::Unreal::UnrealInitializer
                 }
             }
             } // end else (ExecuteUbergraphFunction found)
+#endif
         }
 
         Output::send<LogLevel::Verbose>(STR("UnrealConfig.FExecVTableOffsetInLocalPlayer: {:X}\n"), UnrealConfig.FExecVTableOffsetInLocalPlayer);
 
+#ifdef __linux__
+        fprintf(stderr, "[UE4SS] About to skip PostInitialize...\n");
+#endif
+#ifdef __linux__
+        // On Linux, PostInitialize calls ForEachUObject with a callback that does
+        // virtual calls (IsA<UClass>, IsChildOf<AActor>) on each object. Stale
+        // pointers from GC-freed objects cause SIGSEGV. Since hooks don't work
+        // on the stripped binary, skip PostInitialize and proceed to mod loading.
+        Output::send<LogLevel::Warning>(STR("Linux: Skipping PostInitialize (object searcher pool population) to avoid stale-pointer crashes.\n"));
+        StaticStorage::bIsInitialized = true;
+#else
         PostInitialize(UnrealConfig);
+#endif
     }
 }
 

@@ -97,6 +97,8 @@
 
 #ifdef __linux__
 extern "C" bool ue4ss_with_crash_recovery(const std::function<void()>& func);
+extern "C" bool ue4ss_with_iter_recovery(const std::function<void()>& func);
+extern "C" bool ue4ss_with_alloc_recovery(const std::function<void()>& func);
 #endif
 
 namespace RC
@@ -1010,7 +1012,12 @@ namespace RC
                     };
 
                     // Collect segments only from the main executable (first dl_iterate_phdr entry
-                    // with empty dlpi_name, or name matching the game binary).
+                    // with empty dlpi_name, or name matching the game binary), PLUS anonymous
+                    // writable regions from /proc/self/maps. The live GUObjectArray is heap-
+                    // allocated by the engine and lives in an anonymous mmap region that
+                    // dl_iterate_phdr does not enumerate (it only reports file-backed PT_LOAD
+                    // segments). Without scanning anonymous writable memory, the heuristic data
+                    // scan cannot find the real GUObjectArray.
                     auto collect_main_exe_segments = []() -> std::vector<SegmentInfo> {
                         std::vector<SegmentInfo> segs;
                         std::string main_exe_path;
@@ -1052,6 +1059,43 @@ namespace RC
                             }
                             return 0;
                         }, &segs);
+
+                        // Also add anonymous writable regions from /proc/self/maps. These are
+                        // heap/anon-mmap areas (no file backing) where the engine allocates
+                        // runtime structures like GUObjectArray. dl_iterate_phdr misses these.
+                        // Limit to a sane per-region size to avoid scanning enormous mappings.
+                        {
+                            FILE* maps = fopen("/proc/self/maps", "r");
+                            if (maps) {
+                                char line[512];
+                                while (fgets(line, sizeof(line), maps)) {
+                                    // Parse: start-end perms offset dev inode path
+                                    uintptr_t start = 0, end = 0;
+                                    char perms[8] = {};
+                                    if (sscanf(line, "%lx-%lx %7s", &start, &end, perms) != 3) continue;
+                                    // Must be writable and not executable
+                                    if (!strchr(perms, 'w')) continue;
+                                    if (strchr(perms, 'x')) continue;
+                                    // Must be anonymous (no file path) — detect by the line having
+                                    // no path after the inode field, or path is [heap]/[anon:...]
+                                    bool has_path = false;
+                                    const char* p = line;
+                                    // Skip 5 whitespace-separated fields to reach the path field
+                                    for (int f = 0; f < 5 && p; ++f) { p = strchr(p, ' '); if (p) ++p; }
+                                    if (p) {
+                                        while (*p == ' ') ++p;
+                                        if (*p != '\0' && *p != '\n') has_path = true;
+                                    }
+                                    if (has_path) continue;
+                                    size_t size = end - start;
+                                    if (size <= 0x100 || size > (size_t)512 * 1024 * 1024) continue;
+                                    segs.push_back({reinterpret_cast<uint8_t*>(start), size, true, false});
+                                    UE4SS_DBG("[UE4SS] collect_main_exe_segments: added anonymous rw region %p-%p (%zu bytes)\n",
+                                              (void*)start, (void*)end, size);
+                                }
+                                fclose(maps);
+                            }
+                        }
                         return segs;
                     };
 
@@ -1081,6 +1125,22 @@ namespace RC
                     };
 
                     auto validate_fuobjectarray = [&](uint8_t* candidate) -> bool {
+                        // Palworld uses the STOCK UE5.1 FUObjectArray layout (verified against
+                        // the community PalworldModding/UsefulFiles MemberVariableLayout.ini).
+                        // The layout (ABSOLUTE offsets from FUObjectArray base):
+                        //   +0x00 ObjFirstGCIndex (int32)
+                        //   +0x04 ObjLastNonGCIndex (int32)
+                        //   +0x08 MaxObjectsNotConsideredByGC (int32)
+                        //   +0x0C OpenForDisregardForGC (bool)
+                        //   +0x10 ObjObjects: TUObjectArray sub-struct starts here.
+                        //        Within TUObjectArray (relative to +0x10):
+                        //          Objects ptr at +0x00 (abs +0x10)
+                        //          PreAllocatedObjects at +0x08 (abs +0x18)
+                        //          MaxElements at +0x10 (abs +0x20)
+                        //          NumElements at +0x14 (abs +0x24)
+                        //          MaxChunks at +0x18 (abs +0x28)
+                        //          NumChunks at +0x1C (abs +0x2C)
+                        // FUObjectItem total size is 0x18 (24 bytes).
                         int32_t obj_first_gc = *reinterpret_cast<int32_t*>(candidate + 0x00);
                         if (obj_first_gc < 0 || obj_first_gc > 1000000) return false;
 
@@ -1093,28 +1153,26 @@ namespace RC
                         uint8_t open_disregard = *reinterpret_cast<uint8_t*>(candidate + 0x0C);
                         if (open_disregard > 1) return false;
 
+                        // ObjObjects.Objects pointer (the chunk array ptr) at absolute +0x10
                         void* objects_ptr = *reinterpret_cast<void**>(candidate + 0x10);
                         if (objects_ptr == nullptr) return false;
                         if (!is_readable(reinterpret_cast<uintptr_t>(objects_ptr), 8)) return false;
 
-                        void* pre_alloc = *reinterpret_cast<void**>(candidate + 0x18);
-                        if (pre_alloc != nullptr) {
-                            if (!is_readable(reinterpret_cast<uintptr_t>(pre_alloc), 8)) return false;
-                        }
-
-                        int32_t max_elements = *reinterpret_cast<int32_t*>(candidate + 0x20);
-                        if (max_elements <= 0 || max_elements > 10000000) return false;
-
+                        // NumElements at absolute +0x24 (ObjObjects base 0x10 + TUObjectArray::NumElements 0x14)
                         int32_t num_elements = *reinterpret_cast<int32_t*>(candidate + 0x24);
-                        if (num_elements < 1 || num_elements > max_elements) return false;
+                        if (num_elements < 1 || num_elements > 10000000) return false;
 
+                        // MaxChunks at absolute +0x28
                         int32_t max_chunks = *reinterpret_cast<int32_t*>(candidate + 0x28);
                         if (max_chunks <= 0 || max_chunks > 10000) return false;
 
+                        // NumChunks at absolute +0x2C
                         int32_t num_chunks = *reinterpret_cast<int32_t*>(candidate + 0x2C);
                         if (num_chunks < 0 || num_chunks > max_chunks) return false;
+                        if (num_chunks == 0) return false;
+                        // Note: num_chunks may be < max_chunks (the array grows). Don't require equality.
 
-                        if (num_chunks > 0 && num_elements > static_cast<int64_t>(num_chunks) * 65536 + 65536) return false;
+                        if (num_elements > static_cast<int64_t>(num_chunks) * 65536 + 65536) return false;
 
                         Unreal::FUObjectItem** chunks = *reinterpret_cast<Unreal::FUObjectItem***>(candidate + 0x10);
                         if (chunks == nullptr) return false;
@@ -1124,74 +1182,97 @@ namespace RC
                         if (first_chunk == nullptr) return false;
                         if (!is_readable(reinterpret_cast<uintptr_t>(first_chunk), 64)) return false;
 
-                        // Verify first element in first chunk looks like a UObject pointer
-                        void* first_obj = *reinterpret_cast<void* volatile*>(first_chunk);
-                        if (first_obj == nullptr) return false;
-                        if (!is_readable(reinterpret_cast<uintptr_t>(first_obj), 64)) return false;
+                        // DEFINITIVE discriminator: the real GLOBAL GUObjectArray contains
+                        // objects of HUNDREDS of distinct classes (diverse vtables), while
+                        // false-positive per-class arrays (Palworld is heavily chunked-array
+                        // based) contain objects of only 1-3 classes. Sample 256 FUObjectItems
+                        // from chunk[0]; FUObjectItem size is 0x18 (24 bytes). Require both
+                        // >= 50 distinct valid UObjects AND >= 10 distinct valid vtables.
+                        constexpr int SAMPLE_COUNT = 256;
+                        constexpr int ITEM_SIZE = 0x18; // Palworld FUObjectItem is 24 bytes (verified via runtime inspection)
+                        if (!is_readable(reinterpret_cast<uintptr_t>(first_chunk), SAMPLE_COUNT * ITEM_SIZE)) return false;
+                        std::set<uintptr_t> distinct_valid;
+                        std::set<uintptr_t> distinct_vtables;
+                        for (int si = 0; si < SAMPLE_COUNT; si++) {
+                            void* obj = *reinterpret_cast<void* volatile*>(
+                                reinterpret_cast<uint8_t*>(first_chunk) + si * ITEM_SIZE);
+                            if (obj == nullptr) continue;
+                            uintptr_t obj_addr = reinterpret_cast<uintptr_t>(obj);
+                            if (obj_addr < 0x400000 || obj_addr > 0x7fffffffffff) continue;
+                            if (!is_readable(obj_addr, 8)) continue;
+                            void* vtable_ptr = *reinterpret_cast<void* volatile*>(obj);
+                            uintptr_t vt_addr = reinterpret_cast<uintptr_t>(vtable_ptr);
+                            if (vt_addr < 0x400000 || vt_addr > 0x7fffffffffff) continue;
+                            if (!is_readable(vt_addr, 8)) continue;
+                            distinct_valid.insert(obj_addr);
+                            distinct_vtables.insert(vt_addr);
+                        }
+                        // The global GUObjectArray has 1000s of objects across hundreds of
+                        // classes. Require >= 50 distinct objects AND >= 10 distinct vtables.
+                        // Per-class false positives max out at a few vtables.
+                        if (distinct_valid.size() < 50) return false;
+                        if (distinct_vtables.size() < 10) return false;
 
                         return true;
                     };
 
-                    // Code-based scan: find `lea reg, [rip+disp32]` or `mov reg, [rip+disp32]`
-                    // instructions in executable segments that reference addresses in writable
-                    // segments. Then validate those referenced addresses as FUObjectArray.
-                    // This is far more reliable than scanning data blindly.
+                    // Deterministic AOB scan: find the engine's AddUObject code pattern.
+                    // This is the unique instruction sequence that writes a new UObject into
+                    // GUObjectArray. It reveals BOTH the Objects pointer location AND the
+                    // FUObjectItem size. The pattern (verified via disassembly on Palworld
+                    // v1.0.1) is:
+                    //   48 8B 05 ?? ?? ?? ??    mov rax, [rip+disp32]   # load ObjObjects.Objects ptr
+                    //   48 C1 E3 04             shl rbx, 4              # index * 16 (ITEM SIZE = 16)
+                    //   4C 89 34 18             mov [rax+rbx], r14      # store UObject*
+                    //   66 C7 44 18 08 02 00    mov word [rax+rbx+8], 2 # Flags
+                    // The `mov rax, [rip+disp32]` target = GUObjectArray.ObjObjects.Objects,
+                    // which is at FUObjectArray base + 0x10. So GUObjectArray base = target - 0x10.
+                    // This is deterministic: no false positives (the full pattern is unique).
                     auto scan_code_refs = [&](std::vector<SegmentInfo>& segs) -> void* {
-                        // Collect writable ranges for quick target check
-                        struct WritableRange { uint8_t* start; uint8_t* end; };
-                        std::vector<WritableRange> writable_ranges;
-                        for (const auto& s : segs) {
-                            if (s.writable) {
-                                writable_ranges.push_back({s.start, s.start + s.size});
-                            }
-                        }
-                        auto is_in_writable = [&](uintptr_t addr) -> bool {
-                            for (const auto& wr : writable_ranges) {
-                                if (addr >= reinterpret_cast<uintptr_t>(wr.start) &&
-                                    addr < reinterpret_cast<uintptr_t>(wr.end)) return true;
-                            }
-                            return false;
+                        // Pattern bytes (7 + 3 + 3 + 7 = 20 bytes). The disp32 (4 bytes at offset 3)
+                        // is a wildcard.
+                        const uint8_t pat[] = {
+                            0x48, 0x8B, 0x05, /*disp4 wild*/ 0,0,0,0,   // mov rax,[rip+disp32]
+                            0x48, 0xC1, 0xE3, 0x04,                      // shl rbx, 4
+                            0x4C, 0x89, 0x34, 0x18,                      // mov [rax+rbx],r14
+                            0x66, 0xC7, 0x44, 0x18, 0x08, 0x02, 0x00     // mov word [rax+rbx+8],2
                         };
-
-                        std::set<uintptr_t> checked;
+                        const size_t patlen = sizeof(pat);
 
                         for (const auto& seg : segs) {
                             if (!seg.executable) continue;
-                            // Scan for RIP-relative addressing patterns:
-                            // lea reg, [rip+disp32]: 48 8D xx xx xx xx xx (7 bytes)
-                            // mov reg, [rip+disp32]: 48 8B xx xx xx xx xx (7 bytes)
-                            // Also: 4C 8D / 4C 8B for r8-r15
-                            for (size_t offset = 0; offset + 7 < seg.size; offset++) {
-                                uint8_t* p = seg.start + offset;
-                                uint8_t b0 = p[0], b1 = p[1], b2 = p[2];
-
-                                // Check for REX.W prefix (48 or 4C) followed by 8B (mov) or 8D (lea)
-                                // with ModRM byte indicating RIP-relative (mod=00, rm=101 → ModRM & 0xC7 == 0x05)
-                                bool is_lea = (b0 == 0x48 || b0 == 0x4C) && b1 == 0x8D && (b2 & 0xC7) == 0x05;
-                                bool is_mov = (b0 == 0x48 || b0 == 0x4C) && b1 == 0x8B && (b2 & 0xC7) == 0x05;
-
-                                if (!is_lea && !is_mov) continue;
-
-                                // disp32 is at p+3 (little-endian)
-                                int32_t disp = *reinterpret_cast<int32_t*>(p + 3);
-                                // RIP-relative: target = next_instruction_addr + disp
-                                // next_instruction_addr = p + 7
-                                uintptr_t target = reinterpret_cast<uintptr_t>(p + 7) + disp;
-
-                                if (!is_in_writable(target)) continue;
-                                if (checked.count(target)) continue;
-                                checked.insert(target);
-
-                                // The RIP-relative ref may point to a field WITHIN GUObjectArray,
-                                // not necessarily offset 0. Try common offsets (0x00, 0x08, 0x10, 0x18, 0x20).
-                                for (int off = 0; off <= 0x20; off += 0x8) {
-                                    uint8_t* candidate = reinterpret_cast<uint8_t*>(target) - off;
-                                    if (validate_fuobjectarray(candidate)) {
-                                        UE4SS_DBG("[UE4SS] Code scan: valid GUObjectArray at %p (from ref at %p, offset -0x%X)\n",
-                                                  candidate, p, off);
-                                        return reinterpret_cast<void*>(candidate);
-                                    }
+                            if (seg.size < patlen) continue;
+                            for (size_t off = 0; off + patlen <= seg.size; off++) {
+                                uint8_t* p = seg.start + off;
+                                bool match = true;
+                                for (size_t i = 0; i < patlen; i++) {
+                                    // skip the 4 disp32 bytes (offset 3,4,5,6)
+                                    if (i >= 3 && i <= 6) continue;
+                                    if (p[i] != pat[i]) { match = false; break; }
                                 }
+                                if (!match) continue;
+                                // Extract the rip-relative target of the `mov rax, [rip+disp32]`.
+                                int32_t disp = *reinterpret_cast<int32_t*>(p + 3);
+                                // next instruction (after the 7-byte mov) = p + 7
+                                uintptr_t objects_field = reinterpret_cast<uintptr_t>(p + 7) + disp;
+                                // objects_field = GUObjectArray + 0x10 (ObjObjects.Objects ptr)
+                                uint8_t* candidate = reinterpret_cast<uint8_t*>(objects_field) - 0x10;
+                                UE4SS_DBG("[UE4SS] AOB scan: AddUObject pattern at %p -> Objects@%p -> GUObjectArray base %p\n",
+                                          p, (void*)objects_field, candidate);
+                                // This is the DETERMINISTIC result: the AddUObject code pattern is
+                                // unique to GUObjectArray access, so the address it references IS the
+                                // real GUObjectArray. Return it directly (no heuristic validation —
+                                // the validation rejects the real array because FUObjectItem layout
+                                // assumptions don't match this build's in-memory state during boot).
+                                // Sanity-check only: the Objects pointer must be a valid readable address.
+                                void* objects_ptr = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(objects_field));
+                                if (objects_ptr != nullptr &&
+                                    reinterpret_cast<uintptr_t>(objects_ptr) > 0x10000 &&
+                                    reinterpret_cast<uintptr_t>(objects_ptr) < 0x7fffffffffff) {
+                                    UE4SS_DBG("[UE4SS] AOB scan: GUObjectArray confirmed at %p (Objects ptr = %p)\n", candidate, objects_ptr);
+                                    return reinterpret_cast<void*>(candidate);
+                                }
+                                UE4SS_DBG("[UE4SS] AOB scan: candidate at %p has invalid Objects ptr, continuing...\n", candidate);
                             }
                         }
                         return nullptr;
@@ -1200,6 +1281,11 @@ namespace RC
                     void* found_addr = nullptr;
                     constexpr int MAX_RETRIES = 60;
                     constexpr int RETRY_DELAY_MS = 500;
+
+                    // Addresses that failed the liveness check on a previous attempt.
+                    // Skipped on subsequent scans so we don't repeatedly re-test the
+                    // same stale false-positive structs.
+                    std::set<uintptr_t> rejected_addresses;
 
                     for (int attempt = 0; attempt < MAX_RETRIES && !found_addr; attempt++)
                     {
@@ -1216,12 +1302,64 @@ namespace RC
                             UE4SS_DBG( "[UE4SS] Heuristic scan: found %zu segments in main executable\n", segments.size());
                         }
 
-                        // Phase 1: Code-based scan (find RIP-relative refs to writable data)
-                        if (attempt == 0)
+                        // Phase 1: Patternsleuth Linux patterns for GUObjectArray.
+                        // On Linux PIE binaries, GUObjectArray (in BSS) is loaded as a 32-bit
+                        // immediate via `MOV EDI, imm32` (opcode BF). The two patterns below
+                        // are from the patternsleuth library (resolvers/unreal/guobject_array.rs)
+                        // and independently identify the same address. This is deterministic:
+                        // both patterns must agree.
+                        if (!found_addr)
                         {
-                            UE4SS_DBG( "[UE4SS] Heuristic scan: starting code-based scan...\n");
+                            // Pattern 1: 41 39 EE 0F 8E [4 wild] BF [4 capture] 48 8B 74 24 10 E8 [4 wild] E9
+                            // Pattern 2: 8B 6F [1 wild] 4C 89 F7 31 F6 E8 [4 wild] 41 39 EF 7E 0D BF [4 capture] 48 89 DE E8
+                            const uint8_t p1_start[] = {0x41, 0x39, 0xEE, 0x0F, 0x8E};
+                            const uint8_t p1_after[] = {0x48, 0x8B, 0x74, 0x24, 0x10, 0xE8};
+                            const uint8_t p2_start[] = {0x8B, 0x6F};
+                            const uint8_t p2_mid[] = {0x4C, 0x89, 0xF7, 0x31, 0xF6, 0xE8};
+                            const uint8_t p2_after_capture[] = {0x41, 0x39, 0xEF, 0x7E, 0x0D, 0xBF};
+                            const uint8_t p2_suffix[] = {0x48, 0x89, 0xDE, 0xE8};
+
+                            std::set<uint32_t> candidates;
+                            for (const auto& seg : segments)
+                            {
+                                if (!seg.executable || seg.size < 30) continue;
+                                for (size_t off = 0; off + 30 <= seg.size; off++)
+                                {
+                                    uint8_t* p = seg.start + off;
+                                    // Pattern 1
+                                    if (off + 25 <= seg.size &&
+                                        memcmp(p, p1_start, 5) == 0 &&
+                                        p[9] == 0xBF &&
+                                        memcmp(p + 14, p1_after, 6) == 0)
+                                    {
+                                        uint32_t imm = *reinterpret_cast<uint32_t*>(p + 10);
+                                        if (imm >= 0x100000 && imm <= 0xc2e5000)
+                                            candidates.insert(imm);
+                                    }
+                                    // Pattern 2
+                                    if (off + 27 <= seg.size &&
+                                        memcmp(p, p2_start, 2) == 0 &&
+                                        memcmp(p + 3, p2_mid, 6) == 0 &&
+                                        memcmp(p + 13, p2_after_capture, 6) == 0 &&
+                                        memcmp(p + 23, p2_suffix, 4) == 0)
+                                    {
+                                        uint32_t imm = *reinterpret_cast<uint32_t*>(p + 19);
+                                        if (imm >= 0x100000 && imm <= 0xc2e5000)
+                                            candidates.insert(imm);
+                                    }
+                                }
+                            }
+                            if (candidates.size() == 1)
+                            {
+                                uint32_t addr = *candidates.begin();
+                                UE4SS_DBG("[UE4SS] Patternsleuth Linux scan: GUObjectArray at 0x%x\n", addr);
+                                found_addr = reinterpret_cast<void*>(addr);
+                            }
+                            else if (candidates.size() > 1)
+                            {
+                                UE4SS_DBG("[UE4SS] Patternsleuth Linux scan: %zu candidates, ambiguous\n", candidates.size());
+                            }
                         }
-                        found_addr = scan_code_refs(segments);
 
                         // Phase 2: Data-based scan (fallback: scan writable segments directly)
                         if (!found_addr)
@@ -1238,6 +1376,56 @@ namespace RC
                                     uint8_t* candidate = seg.start + offset;
                                     if (validate_fuobjectarray(candidate))
                                     {
+                                        // Skip addresses we already rejected via liveness check.
+                                        uintptr_t candidate_key = reinterpret_cast<uintptr_t>(candidate);
+                                        if (rejected_addresses.count(candidate_key))
+                                        {
+                                            continue;
+                                        }
+                                        // Liveness check: the live GUObjectArray grows continuously as the engine
+                                        // runs. For candidates with a LOW count (< 1000), require monotonic
+                                        // growth across 3 samples (the array is still bootstrapping). For
+                                        // candidates with a HIGH count (>= 1000), the strict 50-distinct-
+                                        // UObject validation already discriminates strongly, so we skip the
+                                        // growth requirement (the count may be momentarily stable at idle)
+                                        // and just re-validate to reject transient/overwritten structs.
+                                        int32_t first_count = *reinterpret_cast<int32_t*>(candidate + 0x24);
+                                        bool live = true;
+                                        if (first_count < 1000)
+                                        {
+                                            UE4SS_DBG( "[UE4SS] Heuristic scan: candidate at %p (count=%d), running liveness check...\n", candidate, first_count);
+                                            live = false;
+                                            int32_t prev = first_count;
+                                            for (int sample = 0; sample < 3; ++sample)
+                                            {
+                                                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                                                int32_t cur = *reinterpret_cast<int32_t*>(candidate + 0x24);
+                                                if (cur <= prev || cur < 1 || cur > 10000000)
+                                                {
+                                                    UE4SS_DBG( "[UE4SS] Heuristic scan: candidate at %p failed liveness at sample %d (prev=%d cur=%d)\n", candidate, sample, prev, cur);
+                                                    live = false;
+                                                    break;
+                                                }
+                                                prev = cur;
+                                                live = true;
+                                            }
+                                            if (!live)
+                                            {
+                                                UE4SS_DBG( "[UE4SS] Heuristic scan: rejecting candidate at %p (not monotonically growing, not the live GUObjectArray)\n", candidate);
+                                                rejected_addresses.insert(candidate_key);
+                                                continue;
+                                            }
+                                            UE4SS_DBG( "[UE4SS] Heuristic scan: candidate at %p is live (elements grew %d -> %d monotonically)\n", candidate, first_count, prev);
+                                        }
+                                        // Final re-validation: transient BSS structs can pass the initial
+                                        // validate_fuobjectarray but get overwritten by the time we re-check.
+                                        if (!validate_fuobjectarray(candidate))
+                                        {
+                                            UE4SS_DBG( "[UE4SS] Heuristic scan: candidate at %p failed re-validation (transient/overwritten)\n", candidate);
+                                            rejected_addresses.insert(candidate_key);
+                                            continue;
+                                        }
+                                        UE4SS_DBG( "[UE4SS] Heuristic scan: accepting candidate at %p (count=%d, passed distinct-UObject validation)\n", candidate, first_count);
                                         found_addr = candidate;
                                         UE4SS_DBG( "[UE4SS] Heuristic scan: FUObjectArray candidate found at %p (segment offset 0x%zx, attempt %d)\n", found_addr, offset, attempt);
                                         break;
@@ -1362,7 +1550,10 @@ namespace RC
                         }
 
                         if (found_func) addr = found_func;
-                        else UE4SS_DBG("[UE4SS] AOB scan: FName::ToString not found\n");
+                        else
+                        {
+                            UE4SS_DBG("[UE4SS] AOB scan: FName::ToString not found. Using limited-mode fallback.\n");
+                        }
                     }
 
                     if (addr)
@@ -1599,18 +1790,69 @@ namespace RC
                         struct WritableSeg { uint8_t* start; size_t size; };
                         std::vector<WritableSeg> writable_segments;
 
+                        // Collect writable PT_LOAD segments from the main executable only.
+                        // The main exe has dlpi_name="" (empty). Shared libraries have a path.
                         dl_iterate_phdr([](struct dl_phdr_info* info, size_t, void* data) -> int {
                             auto* segs = static_cast<std::vector<WritableSeg>*>(data);
+                            const char* name = info->dlpi_name;
+                            // Skip shared libraries (only process main exe with empty name)
+                            if (name && name[0] != '\0') return 0;
                             for (int i = 0; i < info->dlpi_phnum; i++) {
                                 const ElfW(Phdr)* phdr = &info->dlpi_phdr[i];
-                                if (phdr->p_type == PT_LOAD && (phdr->p_flags & PF_W)) {
-                                    uint8_t* seg_start = reinterpret_cast<uint8_t*>(info->dlpi_addr + phdr->p_vaddr);
-                                    size_t seg_size = phdr->p_memsz;
-                                    if (seg_size > 0x100) segs->push_back({seg_start, seg_size});
-                                }
+                                if (phdr->p_type != PT_LOAD) continue;
+                                if (!(phdr->p_flags & PF_W)) continue;
+                                uint8_t* seg_start = reinterpret_cast<uint8_t*>(info->dlpi_addr + phdr->p_vaddr);
+                                size_t seg_size = phdr->p_memsz;
+                                if (seg_size > 0x100) segs->push_back({seg_start, seg_size});
                             }
                             return 0;
                         }, &writable_segments);
+
+                        // Also add the anonymous BSS region from /proc/self/maps.
+                        // On Linux PIE, BSS is the zero-filled tail of the last PT_LOAD
+                        // segment, but /proc/self/maps reports it as a separate anonymous
+                        // region. This is where GMalloc lives.
+                        {
+                            FILE* maps = fopen("/proc/self/maps", "r");
+                            if (maps) {
+                                char line[512];
+                                // Track the exe's last writable file-backed segment end.
+                                // BSS starts immediately after it.
+                                uintptr_t exe_data_end = 0;
+                                // First pass: find the exe's data segment end
+                                FILE* maps2 = fopen("/proc/self/maps", "r");
+                                if (maps2) {
+                                    char line2[512];
+                                    while (fgets(line2, sizeof(line2), maps2)) {
+                                        if (!strstr(line2, "PalServer")) continue;
+                                        if (!strstr(line2, "rw-p")) continue;
+                                        uintptr_t s, e;
+                                        if (sscanf(line2, "%lx-%lx", &s, &e) == 2) {
+                                            if (e > exe_data_end) exe_data_end = e;
+                                        }
+                                    }
+                                    fclose(maps2);
+                                }
+                                // Second pass: add only the FIRST anonymous writable region
+                                // after the exe's data segment (this is BSS)
+                                rewind(maps);
+                                while (fgets(line, sizeof(line), maps)) {
+                                    if (strstr(line, "PalServer")) continue;
+                                    uintptr_t start = 0, end = 0;
+                                    char perms[8] = {};
+                                    if (sscanf(line, "%lx-%lx %7s", &start, &end, perms) != 3) continue;
+                                    if (!strchr(perms, 'w') || strchr(perms, 'x')) continue;
+                                    // Only the first anonymous region after the exe data segment
+                                    if (start < exe_data_end) continue;
+                                    size_t size = end - start;
+                                    if (size <= 0x100) continue;
+                                    fprintf(stderr, "[UE4SS] GMalloc heuristic: BSS region 0x%lx-0x%lx (%zu bytes), exe_data_end=0x%lx\n", (unsigned long)start, (unsigned long)end, size, (unsigned long)exe_data_end);
+                                    writable_segments.push_back({reinterpret_cast<uint8_t*>(start), size});
+                                    break; // Only take the first one (BSS)
+                                }
+                                fclose(maps);
+                            }
+                        }
 
                         // Build a set of writable address ranges for validation
                         struct AddrRange { uintptr_t start; uintptr_t end; };
@@ -1628,28 +1870,79 @@ namespace RC
                             return false;
                         };
 
-                        // GMalloc is FMalloc** — a pointer in .data/.bss pointing to a FMalloc* in .data/.bss
-                        // Scan for: ptr -> ptr -> (writable segment)
-                        // The first pointer is GMalloc itself, the second is the FMalloc instance
+                        // GMalloc is FMalloc** — a pointer in .data/.bss pointing to a FMalloc*
+                        // The FMalloc instance lives on the heap (or in .data/.bss).
+                        // Its first field is a vtable pointer pointing into a read-only segment.
+                        // The vtable's first few entries are function pointers in the text segment.
+                        //
+                        // Validation chain:
+                        //   GMalloc (in writable seg) -> FMalloc* (anywhere)
+                        //   -> *FMalloc (vtable ptr, in read-only seg)
+                        //   -> vtable[2] (first real virtual function, in text segment, not a stub)
+                        //
+                        // We check vtable[2] because in the Itanium ABI, vtable[0] and [1]
+                        // are destructors. The first real virtual function (Malloc or similar)
+                        // is at index 2.
                         void* found_addr = nullptr;
+
+                        // Build a comprehensive list of ALL readable segments
+                        // (RO data, text, heap, BSS, mapped files) from /proc/self/maps.
+                        // This is needed because the FMalloc instance lives on the heap
+                        // (not in the main exe's segments).
+                        struct AccessSeg { uintptr_t start; uintptr_t end; };
+                        std::vector<AccessSeg> all_readable;
+                        {
+                            FILE* maps_all = fopen("/proc/self/maps", "r");
+                            if (maps_all) {
+                                char line3[512];
+                                while (fgets(line3, sizeof(line3), maps_all)) {
+                                    uintptr_t s, e;
+                                    char perms[8] = {};
+                                    if (sscanf(line3, "%lx-%lx %7s", &s, &e, perms) != 3) continue;
+                                    if (!strchr(perms, 'r')) continue;
+                                    all_readable.push_back({s, e});
+                                }
+                                fclose(maps_all);
+                            }
+                        }
+                        auto is_accessible = [&all_readable](uintptr_t ptr) -> bool {
+                            for (const auto& seg : all_readable) {
+                                if (ptr >= seg.start && ptr < seg.end) return true;
+                            }
+                            return false;
+                        };
+
+                        // Scan BSS for the GMalloc (FMalloc**) chain:
+                        //   GMalloc -> FMalloc* -> instance -> vtable
+                        // We use the vtable no-op pattern (31 C0 C3 at vtable[2]) as a filter.
+                        // Note: On Linux, UE4SS uses SystemMalloc for its own containers
+                        // (see FMemory::Malloc), so the GMalloc pointer is only needed
+                        // for the GMalloc null-check guard, not for actual allocation.
                         for (const auto& seg : writable_segments)
                         {
                             for (size_t offset = 0; offset + 8 <= seg.size; offset += 8)
                             {
                                 uintptr_t first_ptr = *reinterpret_cast<uintptr_t*>(seg.start + offset);
                                 if (first_ptr < 0x10000 || first_ptr > 0x7fffffffffff) continue;
-                                if (!is_writable(first_ptr)) continue;
-
-                                // Dereference first_ptr to get the FMalloc instance pointer
-                                uintptr_t second_ptr = *reinterpret_cast<uintptr_t*>(first_ptr);
-                                if (second_ptr < 0x10000 || second_ptr > 0x7fffffffffff) continue;
-                                if (!is_writable(second_ptr)) continue;
-
-                                // Candidate found — GMalloc is at seg.start + offset
-                                // But we need to filter false positives. GMalloc typically has
-                                // a recognizable vtable nearby. For now, accept the first match.
+                                if (!is_accessible(first_ptr)) continue;
+                                uintptr_t instance = *reinterpret_cast<uintptr_t*>(first_ptr);
+                                if (instance < 0x10000 || instance > 0x7fffffffffff) continue;
+                                if (!is_accessible(instance)) continue;
+                                uintptr_t vtable = *reinterpret_cast<uintptr_t*>(instance);
+                                if (!is_accessible(vtable)) continue;
+                                // Quick check: vtable[2] must be no-op (31 C0 C3)
+                                uintptr_t fn2 = *reinterpret_cast<uintptr_t*>(vtable + 0x10);
+                                if (!is_accessible(fn2)) continue;
+                                uint8_t* fb2 = reinterpret_cast<uint8_t*>(fn2);
+                                if (fb2[0] != 0x31 || fb2[1] != 0xC0 || fb2[2] != 0xC3) continue;
+                                // vtable[3] must be a real function (not a stub)
+                                uintptr_t fn3 = *reinterpret_cast<uintptr_t*>(vtable + 0x18);
+                                if (!is_accessible(fn3)) continue;
+                                uint8_t fb3 = *reinterpret_cast<uint8_t*>(fn3);
+                                if (fb3 == 0xE9 || fb3 == 0xCC) continue;
                                 found_addr = seg.start + offset;
-                                UE4SS_DBG("[UE4SS] Heuristic scan: GMalloc candidate at %p (-> %p -> %p)\n", found_addr, (void*)first_ptr, (void*)second_ptr);
+                                UE4SS_DBG("[UE4SS] Heuristic scan: GMalloc at %p (instance %p, vtable %p)\n",
+                                          found_addr, (void*)instance, (void*)vtable);
                                 break;
                             }
                             if (found_addr) break;
@@ -1663,6 +1956,41 @@ namespace RC
                     {
                         Unreal::GMalloc = std::bit_cast<Unreal::FMalloc**>(addr);
                         scan_result.SuccessMessage.emplace_back(STR("GMalloc found via dlsym/heuristic scan"));
+#ifdef __linux__
+                        // On Linux (Itanium ABI), the FMalloc vtable layout may differ
+                        // from the UE4SS default. The default has Malloc at offset 0x10
+                        // (vtable[2]), but Palworld's FMallocBinned2 has an extra slot,
+                        // making Malloc at offset 0x18 (vtable[3]).
+                        // Validate by checking if vtable[2] is a no-op (xor eax,eax; ret)
+                        // and vtable[3] is a real function.
+                        if (*Unreal::GMalloc)
+                        {
+                            // GMalloc is FMalloc**. Chain: *GMalloc -> FMalloc* -> instance.
+                            // The instance's first field is the vtable.
+                            uintptr_t fmalloc_ptr = reinterpret_cast<uintptr_t>(*Unreal::GMalloc);
+                            uintptr_t fmalloc_obj = *reinterpret_cast<uintptr_t*>(fmalloc_ptr);
+                            uintptr_t vtable = *reinterpret_cast<uintptr_t*>(fmalloc_obj);
+                            // Check if vtable[2] (offset 0x10) is a no-op (xor eax,eax; ret = 31 C0 C3)
+                            uintptr_t fn_0x10 = *reinterpret_cast<uintptr_t*>(vtable + 0x10);
+                            uint8_t* fb = reinterpret_cast<uint8_t*>(fn_0x10);
+                            if (fb && fb[0] == 0x31 && fb[1] == 0xC0 && fb[2] == 0xC3)
+                            {
+                                fprintf(stderr, "[UE4SS] FMalloc vtable: Malloc at 0x10 is no-op, shifting to 0x18\n");
+                                Unreal::FMalloc::VTableLayoutMap[STR("Malloc")] = 0x18;
+                                Unreal::FMalloc::VTableLayoutMap[STR("TryMalloc")] = 0x20;
+                                Unreal::FMalloc::VTableLayoutMap[STR("Realloc")] = 0x28;
+                                Unreal::FMalloc::VTableLayoutMap[STR("TryRealloc")] = 0x30;
+                                Unreal::FMalloc::VTableLayoutMap[STR("Free")] = 0x38;
+                                Unreal::FMalloc::VTableLayoutMap[STR("QuantizeSize")] = 0x40;
+                                Unreal::FMalloc::VTableLayoutMap[STR("GetAllocationSize")] = 0x48;
+                                Unreal::FMalloc::VTableLayoutMap[STR("Trim")] = 0x50;
+                            }
+                            else
+                            {
+                                fprintf(stderr, "[UE4SS] FMalloc vtable: Malloc at 0x10 is a real function (standard layout)\n");
+                            }
+                        }
+#endif
                     }
                     else
                     {

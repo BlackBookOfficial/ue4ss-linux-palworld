@@ -8,6 +8,13 @@
 #include <Unreal/UnrealVersion.hpp>
 #include <Unreal/VersionedContainer/Container.hpp>
 #include <Unreal/Searcher/ObjectSearcher.hpp>
+extern "C" bool ue4ss_with_iter_recovery(const std::function<void()>& func);
+#ifdef __linux__
+#include <sys/mman.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#endif
+#include <Unreal/Searcher/ObjectSearcher.hpp>
 #include <Unreal/Searcher/ObjectSearcherProfiler.hpp>
 #include <Unreal/ClassListener.hpp>
 #include <DynamicOutput/DynamicOutput.hpp>
@@ -149,7 +156,6 @@ namespace RC::Unreal::UObjectGlobals
             }
         }
 
-
         UObjectGlobals::ForEachUObject([&](UObject* Object, [[maybe_unused]]int32_t ChunkIndex, [[maybe_unused]]int32_t ObjectIndex) {
             // In order to remain safe to use early in init before we've hooked FName::ToString up to KismetStringLibrary:Conv_NameToString, we have to
             // compare FNames directly instead of using GetFullName.
@@ -167,7 +173,31 @@ namespace RC::Unreal::UObjectGlobals
                 }
                 else
                 {
-                    PathObject = PathObject->GetOuterPrivate();
+                    auto NextOuter = PathObject->GetOuterPrivate();
+                    // Validate the outer pointer before following it.
+                    if (NextOuter)
+                    {
+                        const auto OuterAddr = reinterpret_cast<uintptr_t>(NextOuter);
+                        if (OuterAddr < 0x7e0000000000 || OuterAddr > 0x7fffffffffff)
+                        {
+                            NextOuter = nullptr;
+                        }
+#ifdef __linux__
+                        // Safe probe: verify the outer object's vtable is readable before following.
+                        // This catches stale pointers to freed-but-still-mapped objects.
+                        else
+                        {
+                            uint64_t probe;
+                            struct iovec liov = {&probe, 8};
+                            struct iovec riov = {reinterpret_cast<void*>(OuterAddr), 8};
+                            if (process_vm_readv(getpid(), &liov, 1, &riov, 1, 0) != 8)
+                            {
+                                NextOuter = nullptr;
+                            }
+                        }
+#endif
+                    }
+                    PathObject = NextOuter;
                     ++NumPathParts;
                 }
             }
@@ -192,7 +222,13 @@ namespace RC::Unreal::UObjectGlobals
         {
             Names.emplace_back(NamePart, FNAME_Find);
         }
+#ifdef __linux__
+        auto result = StaticFindObject_InternalNoToStringFromNames(Names);
+        fprintf(stderr, "[UE4SS] StaticFindObject(NoToString): result=%p for %zu parts\n", (void*)result, NameParts.size());
+        return result;
+#else
         return StaticFindObject_InternalNoToStringFromNames(Names);
+#endif
     }
 
     auto static IsValidObjectForFindXOf(UObject* object) -> bool
@@ -666,7 +702,6 @@ namespace RC::Unreal::UObjectGlobals
 
         const auto& ObjObjects = GUObjectArray->GetObjObjects();
         static const auto ItemSize = FUObjectItem::UEP_TotalSize();
-
         for (int32_t ItemIndex = 0; ItemIndex < ObjObjects.GetNumElements(); ++ItemIndex)
         {
             const auto& ChunkPtr = ObjObjects.GetObjects();
@@ -692,18 +727,59 @@ namespace RC::Unreal::UObjectGlobals
 
         const auto& ObjObjects = GUObjectArray->GetObjObjects();
         const auto NumChunks = ObjObjects.GetNumChunks();
+        const auto NumElements = ObjObjects.GetNumElements();
         static const auto ItemSize = FUObjectItem::UEP_TotalSize();
 
-        for (int32_t ChunkIndex = 0; ChunkIndex < NumChunks; ++ChunkIndex)
+#ifdef __linux__
+        // Cache the chunk array pointer ONCE. The game thread may reallocate it
+        // while we iterate, causing use-after-free if we re-read it per chunk.
+        const auto ChunksPtrCached = ObjObjects.GetObjects();
+        if (!ChunksPtrCached) return;
+        const int32_t SafeElementLimit = 4 * TUObjectArray::NumElementsPerChunk;
+        const int32_t EffectiveNumElements = NumElements < SafeElementLimit ? NumElements : SafeElementLimit;
+#else
+        const int32_t EffectiveNumElements = NumElements;
+#endif
+
+        int32_t GlobalIndex = 0;
+        for (int32_t ChunkIndex = 0; ChunkIndex < NumChunks && GlobalIndex < EffectiveNumElements; ++ChunkIndex)
         {
-            for (int32_t ItemIndex = 0; ItemIndex < TUObjectArray::NumElementsPerChunk; ++ItemIndex)
+#ifdef __linux__
+            const auto ChunkPtr = ChunksPtrCached[ChunkIndex];
+#else
+            const auto& ChunksPtr = ObjObjects.GetObjects();
+            const auto ChunkPtr = ChunksPtr[ChunkIndex];
+#endif
+            if (!ChunkPtr) break;
+            for (int32_t ItemIndex = 0; ItemIndex < TUObjectArray::NumElementsPerChunk && GlobalIndex < EffectiveNumElements; ++ItemIndex, ++GlobalIndex)
             {
-                const auto& ChunksPtr = ObjObjects.GetObjects();
-                const auto ObjectItem = std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(ChunksPtr[ChunkIndex])[ItemIndex * ItemSize]);
+                const auto ObjectItem = std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(ChunkPtr)[ItemIndex * ItemSize]);
+#ifdef __linux__
+                // Wrap the ENTIRE iteration body (including GetUObject, IsUnreachable,
+                // and callback) in per-iteration SIGSEGV recovery. The GC can free
+                // objects and leave stale FUObjectItem entries that crash when accessed.
+                UObject* Object = nullptr;
+                LoopAction iter_action = LoopAction::Continue;
+                bool crashed = !ue4ss_with_iter_recovery([&]() {
+                    Object = ObjectItem->GetUObject();
+                    if (!Object) { return; }
+                    if (ObjectItem->IsUnreachable()) { return; }
+                    uintptr_t obj_addr = reinterpret_cast<uintptr_t>(Object);
+                    if (obj_addr < 0x7e0000000000 || obj_addr > 0x7fffffffffff) { return; }
+                    int32_t item_flags = *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(ObjectItem) + 0x8);
+                    if (item_flags == 0) { return; }
+                    GUOBJECTARRAY_PROFILE_ITER_COUNT()
+                    iter_action = Callable(Object, ChunkIndex, ItemIndex);
+                });
+                (void)crashed;
+                Action = iter_action;
+#else
                 const auto Object = ObjectItem->GetUObject();
-                if (ObjectItem->IsUnreachable() || !Object) { continue; }
+                if (!Object) { continue; }
+                if (ObjectItem->IsUnreachable()) { continue; }
                 GUOBJECTARRAY_PROFILE_ITER_COUNT()
                 Action = Callable(Object, ChunkIndex, ItemIndex);
+#endif
                 if (Action == LoopAction::Break) { break; }
             }
             if (Action == LoopAction::Break) { break; }
@@ -780,8 +856,11 @@ namespace RC::Unreal::UObjectGlobals
 
     auto ForEachUObject(const ForEachUObjectCallback& Callable) -> void
     {
-        // TODO: Expose whether FUObjectArray is chunked in ini.
-        //       This is just in case there's a game with custom changes where they pulled the chunked array into a non-chunked UE version.
+#ifdef __linux__
+        // Palworld Linux: Uses FChunkedFixedUObjectArray (verified via patternsleuth
+        // Linux patterns and runtime inspection). 6 chunks, 357154 objects, 24-byte FUObjectItem.
+        ForEachUObject_Chunked(Callable);
+#else
         if (Version::IsAtMost(4, 19))
         {
             ForEachUObject_NonChunked(Callable);
@@ -790,6 +869,7 @@ namespace RC::Unreal::UObjectGlobals
         {
             ForEachUObject_Chunked(Callable);
         }
+#endif
     }
 
     auto ForEachUObjectInChunk(int32_t ChunkIndex, const std::function<LoopAction(UObject*, int32)>& Callable) -> void

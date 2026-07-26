@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bit>
+#include <cstring>
 
 #include <ASMHelper/ASMHelper.hpp>
 #include <Zydis/Zydis.h>
@@ -13,9 +14,16 @@
 #ifndef _MSC_VER
 template <typename MemberFuncPtr>
 static MemberFuncPtr bit_cast_mfp(void* ptr) {
-    union { void* in; MemberFuncPtr out; } u;
-    u.in = ptr;
-    return u.out;
+    // On the Itanium ABI (Linux/GCC/Clang), a pointer-to-member-function is 16 bytes:
+    //   bytes 0-7: function pointer (or vtable offset if low bit is set)
+    //   bytes 8-15: 'this' adjustment offset
+    // A union copy only initializes 8 bytes, leaving the adjustment field
+    // uninitialized. If the adjustment field contains garbage, the 'this'
+    // pointer gets corrupted, causing SIGSEGV in the called function.
+    // Fix: zero-initialize the entire PMF before copying the function pointer.
+    MemberFuncPtr out{};  // zero-initialize (both fields = 0)
+    std::memcpy(&out, &ptr, sizeof(void*));
+    return out;
 }
 #define BIT_CAST_MFP(MemberFuncPtr, expr) bit_cast_mfp<MemberFuncPtr>(expr)
 #else

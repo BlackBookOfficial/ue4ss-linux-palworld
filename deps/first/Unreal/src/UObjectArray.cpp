@@ -173,33 +173,69 @@ namespace RC::Unreal
     FUObjectItem* TUObjectArray::GetObjectPtr(int32_t Index) const
     {
         static const auto ItemSize = FUObjectItem::UEP_TotalSize();
+#ifdef __linux__
+        // Palworld Linux: FChunkedFixedUObjectArray layout.
+        // GUObjectArray+0x10 = ObjObjects sub-struct.
+        //   ObjObjects+0x00 (abs +0x10) = FUObjectItem** Objects (chunk array)
+        //   ObjObjects+0x14 (abs +0x24) = int32 NumElements
+        //   ObjObjects+0x18 (abs +0x28) = int32 MaxChunks
+        //   ObjObjects+0x1c (abs +0x2c) = int32 NumChunks
+        // Each chunk is a contiguous array of FUObjectItem (24 bytes each).
+        // Chunk size = 65536 bytes / ItemSize = 65536/24 = 2730 items.
+        // Wait — verified: each chunk holds up to 65536 items (not limited by 65536 bytes).
+        // The engine allocates chunks large enough for 65536 FUObjectItems.
+        // Items per chunk = 65536.
+        // ItemSize is 24 (0x18) for Palworld.
+        const int32_t ItemsPerChunk = 65536;
+        const int32_t ChunkIndex = Index / ItemsPerChunk;
+        const int32_t WithinChunk = Index % ItemsPerChunk;
+        // ObjObjects base = GUObjectArray + 0x10 (the TUObjectArray sub-struct)
+        auto* obj_objects = Helper::Casting::ptr_cast<uint8_t*>(const_cast<FUObjectArray*>(GUObjectArray), 0x10);
+        // Objects (chunk array ptr) at ObjObjects+0x00
+        FUObjectItem** chunks = *reinterpret_cast<FUObjectItem***>(obj_objects);
+        if (!chunks || ChunkIndex < 0)
+            return nullptr;
+        FUObjectItem* chunk = chunks[ChunkIndex];
+        if (!chunk)
+            return nullptr;
+        return reinterpret_cast<FUObjectItem*>(reinterpret_cast<uint8_t*>(chunk) + WithinChunk * ItemSize);
+#else
         if (Version::IsAtMost(4, 19))
         {
             return std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(GetObjects())[Index * ItemSize]);
         }
         else
         {
-            const int32_t ChunkIndex = Index / NumElementsPerChunk;
-            const int32_t WithinChunkIndex = Index % NumElementsPerChunk;
-            const auto Chunk = GetObjects()[ChunkIndex];
-            return std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(Chunk)[WithinChunkIndex * ItemSize]);
+            return std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(GetObjects())[Index * ItemSize]);
         }
+#endif
     }
 
     FUObjectItem* TUObjectArray::GetObjectPtr(int32_t Index)
     {
         static const auto ItemSize = FUObjectItem::UEP_TotalSize();
+#ifdef __linux__
+        const int32_t ItemsPerChunk = 65536;
+        const int32_t ChunkIndex = Index / ItemsPerChunk;
+        const int32_t WithinChunk = Index % ItemsPerChunk;
+        auto* obj_objects = Helper::Casting::ptr_cast<uint8_t*>(GUObjectArray, 0x10);
+        FUObjectItem** chunks = *reinterpret_cast<FUObjectItem***>(obj_objects);
+        if (!chunks || ChunkIndex < 0)
+            return nullptr;
+        FUObjectItem* chunk = chunks[ChunkIndex];
+        if (!chunk)
+            return nullptr;
+        return reinterpret_cast<FUObjectItem*>(reinterpret_cast<uint8_t*>(chunk) + WithinChunk * ItemSize);
+#else
         if (Version::IsAtMost(4, 19))
         {
             return std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(GetObjects())[Index * ItemSize]);
         }
         else
         {
-            const int32_t ChunkIndex = Index / NumElementsPerChunk;
-            const int32_t WithinChunkIndex = Index % NumElementsPerChunk;
-            const auto Chunk = GetObjects()[ChunkIndex];
-            return std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(Chunk)[WithinChunkIndex * ItemSize]);
+            return std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(GetObjects())[Index * ItemSize]);
         }
+#endif
     }
 
     const FUObjectItem& TUObjectArray::operator[](int32_t Index) const
@@ -264,12 +300,25 @@ namespace RC::Unreal
 
     int32_t UObjectArray::GetNumElements()
     {
+#ifdef __linux__
+        // Palworld Linux: FChunkedFixedUObjectArray layout.
+        // GUObjectArray+0x10 = ObjObjects sub-struct. NumElements is at ObjObjects+0x14
+        // (absolute GUObjectArray+0x24). Verified via patternsleuth Linux patterns
+        // and runtime inspection (NumElements=357154 matches count of valid UObjects).
+        return *Helper::Casting::ptr_cast<int32*>(GUObjectArray, 0x24);
+#else
         return GUObjectArray->GetObjObjects().GetNumElements();
+#endif
     }
 
     int32_t UObjectArray::GetNumChunks()
     {
+#ifdef __linux__
+        // Palworld Linux: NumChunks at GUObjectArray+0x2c
+        return *Helper::Casting::ptr_cast<int32*>(GUObjectArray, 0x2c);
+#else
         return GUObjectArray->GetObjObjects().GetNumChunks();
+#endif
     }
 
     int32_t UObjectArray::GetObjectItemSize()
@@ -284,6 +333,16 @@ namespace RC::Unreal
 
     FUObjectItem* FUObjectArray::IndexToObject(int32_t Index)
     {
+#ifdef __linux__
+        if (Index >= 0 && Index < UObjectArray::GetNumElements())
+        {
+            return GUObjectArray->GetObjObjects().GetObjectPtr(Index);
+        }
+        else
+        {
+            return nullptr;
+        }
+#else
         if (Index >= 0 && Index < GUObjectArray->GetObjObjects().GetNumElements())
         {
             return &GUObjectArray->GetObjObjects()[Index];
@@ -292,6 +351,7 @@ namespace RC::Unreal
         {
             return nullptr;
         }
+#endif
     }
 
     int32 FUObjectArray::AllocateSerialNumber(int32 Index)

@@ -86,6 +86,11 @@ namespace RC
         {
             m_active_func = m_stored_original_func;
             m_function_address = std::bit_cast<void*>(m_stored_original_func);
+            // Mark as not ready so callers skip calling the (possibly wrong/unverified)
+            // function pointer and use fallback paths instead. Without this, is_ready()
+            // continues to return true after a reset, causing calls to stale/wrong
+            // addresses (e.g. an unverified FName constructor AOB match → crash).
+            m_is_ready = false;
         }
 
         // Returns the currently active function pointer

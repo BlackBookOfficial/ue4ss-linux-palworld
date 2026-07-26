@@ -58,60 +58,89 @@ namespace RC::Unreal
 
     auto TypeChecker::store_all_object_types() -> bool
     {
+#ifdef __linux__
+       // On Linux, StaticFindObject_InternalSlow calls GetFullName() which requires
+       // ProcessEvent (via Conv_NameToString). ProcessEvent may crash on stale UObjects
+       // during the ForEachUObject scan. Use StaticFindObject_InternalNoToStringFromStrings
+       // instead, which compares FName ComparisonIndex directly without ToString.
+       auto find_object = [](const CharType* full_path) -> UClass* {
+           StringType path(full_path);
+           std::vector<StringViewType> parts;
+           size_t dot = path.find(STR('.'));
+           if (dot == StringType::npos) return nullptr;
+           parts.push_back(StringViewType(path.data(), dot));
+           parts.push_back(StringViewType(path.data() + dot + 1, path.size() - dot - 1));
+           auto result = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings(parts));
+#ifdef __linux__
+           // Log the FName parts for debugging
+           auto name1 = FName(parts[0], FNAME_Find);
+           auto name2 = FName(parts[1], FNAME_Find);
+           fprintf(stderr, "[UE4SS] find_object: part1_cmp=0x%x part2_cmp=0x%x result=%p\n",
+                   (unsigned)name1.GetComparisonIndex().ToUnstableInt(),
+                   (unsigned)name2.GetComparisonIndex().ToUnstableInt(),
+                   (void*)result);
+#endif
+           return result;
+       };
+#else
        //StaticFindObject_InternalSlow is used for compatability reasons.
-        UObject::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Object")));
-        UField::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Field")));
-        UStruct::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Struct")));
+       auto find_object = [](const CharType* full_path) -> UClass* {
+           return static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, full_path));
+       };
+#endif
+        UObject::StaticClassStorage = find_object(STR("/Script/CoreUObject.Object"));
+        UField::StaticClassStorage = find_object(STR("/Script/CoreUObject.Field"));
+        UStruct::StaticClassStorage = find_object(STR("/Script/CoreUObject.Struct"));
 
-        AActor::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.Actor")));
-        UWorld::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.World")));
+        AActor::StaticClassStorage = find_object(STR("/Script/Engine.Actor"));
+        UWorld::StaticClassStorage = find_object(STR("/Script/Engine.World"));
 
-        UClass* enum_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Enum")));
+        UClass* enum_ptr = find_object(STR("/Script/CoreUObject.Enum"));
         UEnum::StaticClassStorage = enum_ptr;
 
-        UClass* user_defined_enum_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.UserDefinedEnum")));
+        UClass* user_defined_enum_ptr = find_object(STR("/Script/Engine.UserDefinedEnum"));
         UUserDefinedEnum::StaticClassStorage = user_defined_enum_ptr;
 
-        UClass* class_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Class")));
+        UClass* class_ptr = find_object(STR("/Script/CoreUObject.Class"));
         UClass::StaticClassStorage = class_ptr;
 
-        UClass* bp_generated_class_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.BlueprintGeneratedClass")));
+        UClass* bp_generated_class_ptr = find_object(STR("/Script/Engine.BlueprintGeneratedClass"));
         UBlueprintGeneratedClass::StaticClassStorage = bp_generated_class_ptr;
 
-        UClass* widget_bp_generated_class_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/UMG.WidgetBlueprintGeneratedClass")));
+        UClass* widget_bp_generated_class_ptr = find_object(STR("/Script/UMG.WidgetBlueprintGeneratedClass"));
         UWidgetBlueprintGeneratedClass::StaticClassStorage = widget_bp_generated_class_ptr;
 
-        UClass* anim_bp_generated_class_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.AnimBlueprintGeneratedClass")));
+        UClass* anim_bp_generated_class_ptr = find_object(STR("/Script/Engine.AnimBlueprintGeneratedClass"));
         UAnimBlueprintGeneratedClass::StaticClassStorage = anim_bp_generated_class_ptr;
 
-        UClass* canvas_panel_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/UMG.CanvasPanel")));
+        UClass* canvas_panel_ptr = find_object(STR("/Script/UMG.CanvasPanel"));
         UCanvasPanel::StaticClassStorage = canvas_panel_ptr;
 
         // Not available in 4.12 (I've not checked exactly when it starts being available)
-        UClass* asset_data_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/AssetRegistry.AssetData")));
+        UClass* asset_data_ptr = find_object(STR("/Script/AssetRegistry.AssetData"));
         if (!asset_data_ptr)
         {
             // In 4.26, they moved it from the 'AssetRegistry' package to the 'CoreUObject' package
-            asset_data_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.AssetData")));
+            asset_data_ptr = find_object(STR("/Script/CoreUObject.AssetData"));
         }
         FAssetData::StaticClassStorage = asset_data_ptr;
 
-        UPackage::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Package")));
-        UInterface::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Interface")));
-        UActorComponent::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.ActorComponent")));
-        USceneComponent::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.SceneComponent")));
-        UGameViewportClient::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.GameViewportClient")));
-        UDataTable::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/Engine.UDataTable")));
+        UPackage::StaticClassStorage = find_object(STR("/Script/CoreUObject.Package"));
+        UInterface::StaticClassStorage = find_object(STR("/Script/CoreUObject.Interface"));
+        UActorComponent::StaticClassStorage = find_object(STR("/Script/Engine.ActorComponent"));
+        USceneComponent::StaticClassStorage = find_object(STR("/Script/Engine.SceneComponent"));
+        UGameViewportClient::StaticClassStorage = find_object(STR("/Script/Engine.GameViewportClient"));
+        UDataTable::StaticClassStorage = find_object(STR("/Script/Engine.UDataTable"));
 
-        UFunction::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Function")));
-        UDelegateFunction::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.DelegateFunction")));
+        UFunction::StaticClassStorage = find_object(STR("/Script/CoreUObject.Function"));
+        UDelegateFunction::StaticClassStorage = find_object(STR("/Script/CoreUObject.DelegateFunction"));
 
         if (Version::IsAtLeast(4, 23))
         {
-            USparseDelegateFunction::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.SparseDelegateFunction")));
+            USparseDelegateFunction::StaticClassStorage = find_object(STR("/Script/CoreUObject.SparseDelegateFunction"));
         }
 
-        UClass* script_struct_ptr = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.ScriptStruct")));
+        UClass* script_struct_ptr = find_object(STR("/Script/CoreUObject.ScriptStruct"));
         UScriptStruct::StaticClassStorage = script_struct_ptr;
 
         /*
@@ -149,34 +178,102 @@ namespace RC::Unreal
         if (Version::IsAtLeast(4, 25))
         {
             auto find_all_property_types = [](const StringType& obj_string) -> void {
+#ifdef __linux__
+                // Use NoToString path on Linux to avoid ProcessEvent crash
+                size_t dot = obj_string.find(STR('.'));
+                if (dot == StringType::npos) { return; }
+                std::vector<StringViewType> parts = {
+                    StringViewType(obj_string.data(), dot),
+                    StringViewType(obj_string.data() + dot + 1, obj_string.size() - dot - 1)
+                };
+                UStruct* actor_obj = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings(parts));
+#ifdef __linux__
+                fprintf(stderr, "[UE4SS] find_all_property_types: obj=%p\n", (void*)actor_obj);
+#endif
+#else
                 UStruct* actor_obj = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, obj_string.c_str()));
+#endif
                 if (!actor_obj) { return; }
 
                 // Manually iterating fields here because 'ForEachProperty' isn't ready until after this function is done
                 FField* field = actor_obj->GetChildProperties();
+#ifdef __linux__
+                fprintf(stderr, "[UE4SS] find_all_property_types: first field=%p\n", (void*)field);
+                int field_count = 0;
+#endif
                 while (field)
                 {
+#ifdef __linux__
+                    if (field_count < 5) {
+                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d]=%p\n", field_count, (void*)field);
+                    }
+#endif
                     // Hard-coded offset cast here because 'FField::GetClass' is not ready until after this function is done
                     FFieldClass* ffield_class = Helper::Casting::ptr_cast_deref<FFieldClass*>(field, FFieldClassOffset);
+#ifdef __linux__
+                    if (field_count < 5) {
+                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] ffield_class=%p\n", field_count, (void*)ffield_class);
+                    }
+#endif
                     if (!ffield_class)
                     {
                         field = field->GetNextFFieldUnsafe();
+#ifdef __linux__
+                        ++field_count;
+#endif
                         continue;
                     }
 
                     FName type_name = ffield_class->GetFName();
+#ifdef __linux__
+                    if (field_count < 50) {
+                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] type_name cmp=0x%x\n", field_count, (unsigned)type_name.GetComparisonIndex().ToUnstableInt());
+                        fflush(stderr);
+                    }
+#endif
 
                     // Populate the global FFieldClass maps for dynamic type lookup
+#ifdef __linux__
+                    if (field_count < 50) {
+                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] about to Contains()\n", field_count);
+                        fflush(stderr);
+                    }
+#endif
                     if (!FFieldClass::GetNameToFieldClassMap().Contains(type_name))
                     {
-                        FFieldClass::GetNameToFieldClassMap().Add(type_name, ffield_class);
-                        FFieldClass::GetAllFieldClasses().Add(ffield_class);
+#ifdef __linux__
+                        if (field_count < 50) {
+                            fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] about to Add()\n", field_count);
+                            fflush(stderr);
+                        }
+#endif
+                        try {
+                            FFieldClass::GetNameToFieldClassMap().Add(type_name, ffield_class);
+                            FFieldClass::GetAllFieldClasses().Add(ffield_class);
+#ifdef __linux__
+                            if (field_count < 50) {
+                                fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] Add() succeeded\n", field_count);
+                                fflush(stderr);
+                            }
+#endif
+                        } catch (const std::exception& e) {
+#ifdef __linux__
+                            fprintf(stderr, "[UE4SS] find_all_property_types: Add() EXCEPTION: %s\n", e.what());
+                            fflush(stderr);
+#endif
+                        }
                     }
 
                     // TODO: Look at the dumped objects and put every single FField type in here
                     // At the moment there are probably some missing types
 
                     // Fully supported
+#ifdef __linux__
+                    if (field_count < 50) {
+                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] about to compare type_name\n", field_count);
+                        fflush(stderr);
+                    }
+#endif
                     if (type_name == FName(STR("ObjectProperty"), FNAME_Find))
                     {
                         if ((ffield_class->GetCastFlags() & static_cast<uint64>(EClassCastFlags::CASTCLASS_FObjectPtrProperty)) != 0)
@@ -530,6 +627,13 @@ namespace RC::Unreal
                     }
 
                     field = field->GetNextFFieldUnsafe();
+#ifdef __linux__
+                    ++field_count;
+                    if (field_count < 50 && field) {
+                        fprintf(stderr, "[UE4SS] find_all_property_types: next field[%d]=%p\n", field_count, (void*)field);
+                        fflush(stderr);
+                    }
+#endif
                 }
             };
 
@@ -679,6 +783,9 @@ namespace RC::Unreal
             Output::send(STR("FText size detected as 0x{:X} bytes.\n"), FText::StaticSize());
         }
 
+#ifdef __linux__
+        fprintf(stderr, "[UE4SS] store_all_object_types: about to return true\n");
+#endif
         return true;
     }
 

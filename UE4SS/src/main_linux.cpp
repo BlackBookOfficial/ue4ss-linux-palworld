@@ -24,6 +24,8 @@
 #include <string>
 #include <filesystem>
 #include <signal.h>
+#include <ucontext.h>
+#include <pthread.h>
 #include <setjmp.h>
 #include <functional>
 
@@ -87,13 +89,41 @@ static thread_local bool s_has_jmpbuf = false;
 // Per-mod SIGSEGV recovery (checked first by signal handler)
 static thread_local sigjmp_buf s_mod_jmpbuf;
 static thread_local bool s_has_mod_jmpbuf = false;
+// Per-iteration SIGSEGV recovery (checked before mod recovery)
+// Used by ForEachUObject to skip stale pointers that cause SIGSEGV
+static thread_local sigjmp_buf s_iter_jmpbuf;
+static thread_local bool s_has_iter_jmpbuf = false;
+// Per-call allocator SIGSEGV recovery (checked before iter recovery)
+// Used by FMemory::Malloc/Realloc/Free when trying the engine allocator
+static thread_local sigjmp_buf s_alloc_jmpbuf;
+static thread_local bool s_has_alloc_jmpbuf = false;
 static struct sigaction s_old_sigsegv;
 static struct sigaction s_old_sigbus;
 
 static void ue4ss_sigsegv_handler(int sig, siginfo_t* info, void* ucontext)
 {
-    (void)info; (void)ucontext;
-    // Check per-mod recovery first
+    (void)info;
+    ucontext_t* uc = static_cast<ucontext_t*>(ucontext);
+    uintptr_t rip = uc ? uc->uc_mcontext.gregs[REG_RIP] : 0;
+    uintptr_t rdi = uc ? uc->uc_mcontext.gregs[REG_RDI] : 0;
+    uintptr_t rsi = uc ? uc->uc_mcontext.gregs[REG_RSI] : 0;
+    uintptr_t rdx = uc ? uc->uc_mcontext.gregs[REG_RDX] : 0;
+    uintptr_t rax = uc ? uc->uc_mcontext.gregs[REG_RAX] : 0;
+    uintptr_t fault_addr = info ? (uintptr_t)info->si_addr : 0;
+    fprintf(stderr, "[UE4SS] signal handler: sig=%d alloc=%d iter=%d mod=%d init=%d rip=0x%lx fault=0x%lx rdi=0x%lx rsi=0x%lx rdx=0x%lx rax=0x%lx\n", sig, s_has_alloc_jmpbuf, s_has_iter_jmpbuf, s_has_mod_jmpbuf, s_has_jmpbuf, (unsigned long)rip, (unsigned long)fault_addr, (unsigned long)rdi, (unsigned long)rsi, (unsigned long)rdx, (unsigned long)rax);
+    // Check per-call allocator recovery first (FMemory::Malloc/Realloc/Free)
+    if (s_has_alloc_jmpbuf)
+    {
+        s_has_alloc_jmpbuf = false;
+        siglongjmp(s_alloc_jmpbuf, sig);
+    }
+    // Check per-iteration recovery next (ForEachUObject)
+    if (s_has_iter_jmpbuf)
+    {
+        s_has_iter_jmpbuf = false;
+        siglongjmp(s_iter_jmpbuf, sig);
+    }
+    // Check per-mod recovery next
     if (s_has_mod_jmpbuf)
     {
         UE4SS_ERR("[UE4SS] Caught signal %d during mod execution, recovering...\n", sig);
@@ -128,6 +158,42 @@ extern "C" bool ue4ss_with_crash_recovery(const std::function<void()>& func)
     return true;
 }
 
+// Wrap a callable with per-iteration SIGSEGV recovery.
+// Returns true if the callable completed normally, false if it crashed.
+extern "C" bool ue4ss_with_iter_recovery(const std::function<void()>& func)
+{
+    int sig = sigsetjmp(s_iter_jmpbuf, 1);
+    if (sig != 0)
+    {
+        s_has_iter_jmpbuf = false;
+        fprintf(stderr, "[UE4SS] iter recovery: caught signal %d, skipping item\n", sig);
+        return false;
+    }
+    s_has_iter_jmpbuf = true;
+    fprintf(stderr, "[UE4SS] iter recovery: SET (jmpbuf active)\n");
+    func();
+    s_has_iter_jmpbuf = false;
+    fprintf(stderr, "[UE4SS] iter recovery: CLEAR (callback completed normally)\n");
+    return true;
+}
+
+// Wrap a callable with per-call allocator SIGSEGV recovery.
+// Returns true if the callable completed normally, false if it crashed.
+// Used by FMemory::Malloc/Realloc/Free to try the engine allocator with fallback.
+extern "C" bool ue4ss_with_alloc_recovery(const std::function<void()>& func)
+{
+    int sig = sigsetjmp(s_alloc_jmpbuf, 1);
+    if (sig != 0)
+    {
+        s_has_alloc_jmpbuf = false;
+        return false;
+    }
+    s_has_alloc_jmpbuf = true;
+    func();
+    s_has_alloc_jmpbuf = false;
+    return true;
+}
+
 static auto install_signal_handlers() -> void
 {
     struct sigaction sa{};
@@ -158,13 +224,18 @@ static auto get_module_path() -> std::filesystem::path
 static auto wait_for_game_ready() -> void
 {
     // Wait for the game to fully initialize its memory layout.
-    // UE5 games (like Palworld) need significant time to load.
-    // We wait in stages and check if the game is still alive.
-    UE4SS_DBG("[UE4SS] Waiting for game to initialize...\n");
-    for (int i = 0; i < 10; ++i)
+    // UE5 games (like Palworld) allocate and relocate heap structures (including
+    // GUObjectArray) during boot. If UE4SS scans for GUObjectArray too early, it
+    // finds transient structs that later move, causing the resolved address to
+    // read garbage (negative/unstable element counts) and crash during init.
+    // Wait until the engine has finished its memory layout churn (the server is
+    // fully booted and ticking) before we scan. 30s is conservative; the engine
+    // reaches steady state (~100+ FPS tick) well within this window.
+    UE4SS_DBG("[UE4SS] Waiting for game to initialize (30s for heap to stabilize)...\n");
+    for (int i = 0; i < 30; ++i)
     {
         sleep(1);
-        UE4SS_VDBG("[UE4SS] Waiting... (%d/10)\n", i + 1);
+        UE4SS_VDBG("[UE4SS] Waiting... (%d/30)\n", i + 1);
     }
 }
 
@@ -316,7 +387,21 @@ __attribute__((constructor))
 static void ue4ss_linux_init()
 {
     UE4SS_DBG("[UE4SS] Library loaded via LD_PRELOAD, starting initialization thread...\n");
-    std::thread{thread_dll_start}.detach();
+    // Use pthread_create with a larger stack size. The engine's FMallocBinned2
+    // allocator uses deep call chains (Realloc → Malloc → pool lookup → mutex_lock)
+    // that can exhaust the default 2MB std::thread stack. 8MB matches the main
+    // thread's stack size on Linux and ensures the allocator has enough room.
+    pthread_t tid;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    size_t stack_size = 8 * 1024 * 1024; // 8MB
+    pthread_attr_setstacksize(&attr, stack_size);
+    pthread_create(&tid, &attr, [](void*) -> void* {
+        thread_dll_start();
+        return nullptr;
+    }, nullptr);
+    pthread_attr_destroy(&attr);
+    pthread_detach(tid);
 }
 
 // Destructor runs when the shared library is unloaded
