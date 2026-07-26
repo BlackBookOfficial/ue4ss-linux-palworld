@@ -224,7 +224,6 @@ namespace RC::Unreal::UObjectGlobals
         }
 #ifdef __linux__
         auto result = StaticFindObject_InternalNoToStringFromNames(Names);
-        fprintf(stderr, "[UE4SS] StaticFindObject(NoToString): result=%p for %zu parts\n", (void*)result, NameParts.size());
         return result;
 #else
         return StaticFindObject_InternalNoToStringFromNames(Names);

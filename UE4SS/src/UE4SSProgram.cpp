@@ -1846,7 +1846,7 @@ namespace RC
                                     if (start < exe_data_end) continue;
                                     size_t size = end - start;
                                     if (size <= 0x100) continue;
-                                    fprintf(stderr, "[UE4SS] GMalloc heuristic: BSS region 0x%lx-0x%lx (%zu bytes), exe_data_end=0x%lx\n", (unsigned long)start, (unsigned long)end, size, (unsigned long)exe_data_end);
+                                    UE4SS_DBG("[UE4SS] GMalloc heuristic: BSS region 0x%lx-0x%lx (%zu bytes)\n", (unsigned long)start, (unsigned long)end, size);
                                     writable_segments.push_back({reinterpret_cast<uint8_t*>(start), size});
                                     break; // Only take the first one (BSS)
                                 }
@@ -1975,7 +1975,7 @@ namespace RC
                             uint8_t* fb = reinterpret_cast<uint8_t*>(fn_0x10);
                             if (fb && fb[0] == 0x31 && fb[1] == 0xC0 && fb[2] == 0xC3)
                             {
-                                fprintf(stderr, "[UE4SS] FMalloc vtable: Malloc at 0x10 is no-op, shifting to 0x18\n");
+                                UE4SS_DBG("[UE4SS] FMalloc vtable: Malloc at 0x10 is no-op, shifting to 0x18\n");
                                 Unreal::FMalloc::VTableLayoutMap[STR("Malloc")] = 0x18;
                                 Unreal::FMalloc::VTableLayoutMap[STR("TryMalloc")] = 0x20;
                                 Unreal::FMalloc::VTableLayoutMap[STR("Realloc")] = 0x28;
@@ -1987,7 +1987,7 @@ namespace RC
                             }
                             else
                             {
-                                fprintf(stderr, "[UE4SS] FMalloc vtable: Malloc at 0x10 is a real function (standard layout)\n");
+                                UE4SS_DBG("[UE4SS] FMalloc vtable: Malloc at 0x10 is a real function (standard layout)\n");
                             }
                         }
 #endif

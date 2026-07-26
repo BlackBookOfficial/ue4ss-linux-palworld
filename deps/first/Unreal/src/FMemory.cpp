@@ -30,15 +30,6 @@ namespace RC::Unreal
 
     void* FMalloc::Malloc(SIZE_T Count, uint32 Alignment)
     {
-#ifdef __linux__
-        static bool s_logged = false;
-        if (!s_logged) {
-            s_logged = true;
-            auto it = VTableLayoutMap.find(STR("Malloc"));
-            fprintf(stderr, "[UE4SS] FMalloc::Malloc first call: offset=0x%x (map has %zu entries)\n",
-                    it != VTableLayoutMap.end() ? it->second : 0xDEAD, VTableLayoutMap.size());
-        }
-#endif
         IMPLEMENT_UNREAL_VIRTUAL_WRAPPER(FMalloc, Malloc, void*, PARAMS(SIZE_T, uint32), ARGS(Count, Alignment))
     }
 
@@ -49,18 +40,6 @@ namespace RC::Unreal
 
     void* FMalloc::Realloc(void* Original, SIZE_T Count, uint32 Alignment)
     {
-#ifdef __linux__
-        static thread_local int s_call_count = 0;
-        if (s_call_count < 3) {
-            ++s_call_count;
-            auto it = VTableLayoutMap.find(STR("Realloc"));
-            fprintf(stderr, "[UE4SS] FMalloc::Realloc call #%d: this=%p *GMalloc=%p offset=0x%x orig=%p count=%zu align=%u\n",
-                    s_call_count, (void*)this, (void*)(*GMalloc),
-                    it != VTableLayoutMap.end() ? it->second : 0xDEAD,
-                    Original, (size_t)Count, Alignment);
-            fflush(stderr);
-        }
-#endif
         IMPLEMENT_UNREAL_VIRTUAL_WRAPPER(FMalloc, Realloc, void*, PARAMS(void*, SIZE_T, uint32), ARGS(Original, Count, Alignment))
     }
 

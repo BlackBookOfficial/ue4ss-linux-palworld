@@ -93,8 +93,6 @@ namespace RC::Unreal
 
             // Scan the main executable's r-xp segment for the wrapper signature.
             FILE* maps = fopen("/proc/self/maps", "r");
-            if (!maps) { fprintf(stderr, "[UE4SS] NameProvider: FAILED to open /proc/self/maps\n"); return nullptr; }
-            fprintf(stderr, "[UE4SS] NameProvider: opened /proc/self/maps, scanning...\n");
             char line[512];
             int seg_count = 0;
             while (fgets(line, sizeof(line), maps))
@@ -104,7 +102,6 @@ namespace RC::Unreal
                 ++seg_count;
                 uintptr_t start = 0, end = 0;
                 if (sscanf(line, "%lx-%lx", &start, &end) != 2) { continue; }
-                fprintf(stderr, "[UE4SS] NameProvider: scanning segment 0x%lx-0x%lx (%zu bytes)\n", start, end, (size_t)(end-start));
                 const auto* base = reinterpret_cast<const unsigned char*>(start);
                 size_t size = end - start;
                 // Search for the signature.
@@ -127,7 +124,6 @@ namespace RC::Unreal
                     }
                     if (!has_call) { continue; }
                     g_engine_find_name = reinterpret_cast<EngineFindNameFn>(base + i);
-                    fprintf(stderr, "[UE4SS] NameProvider: found engine find-name wrapper at 0x%lx (offset 0x%lx in segment)\n", (unsigned long)(base + i), (unsigned long)i);
                     break;
                 }
                 if (g_engine_find_name) { break; }
@@ -151,19 +147,6 @@ namespace RC::Unreal
             uint64_t result = 0;
             fn(&result, reinterpret_cast<const char16_t*>(StrName));
             const uint32_t comparison_index = static_cast<uint32_t>(result);
-            // Debug: log lookups to verify the oracle works inside UE4SS.
-            static thread_local int s_debug_count = 0;
-            if (s_debug_count < 64)
-            {
-                ++s_debug_count;
-                char buf[128] = {};
-                int k = 0;
-                for (; k < 64 && StrName[k]; ++k) { buf[k] = static_cast<char>(StrName[k]); }
-                buf[k] = 0;
-                fprintf(stderr, "[UE4SS] FindName: \"%s\" -> cmp_idx=0x%x (full=0x%lx)\n",
-                        buf, comparison_index, (unsigned long)result);
-                fflush(stderr);
-            }
             if (comparison_index == 0) { return FName{}; }
 
             FName name{};

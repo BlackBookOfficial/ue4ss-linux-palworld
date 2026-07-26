@@ -75,10 +75,6 @@ namespace RC::Unreal
            // Log the FName parts for debugging
            auto name1 = FName(parts[0], FNAME_Find);
            auto name2 = FName(parts[1], FNAME_Find);
-           fprintf(stderr, "[UE4SS] find_object: part1_cmp=0x%x part2_cmp=0x%x result=%p\n",
-                   (unsigned)name1.GetComparisonIndex().ToUnstableInt(),
-                   (unsigned)name2.GetComparisonIndex().ToUnstableInt(),
-                   (void*)result);
 #endif
            return result;
        };
@@ -188,7 +184,6 @@ namespace RC::Unreal
                 };
                 UStruct* actor_obj = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings(parts));
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] find_all_property_types: obj=%p\n", (void*)actor_obj);
 #endif
 #else
                 UStruct* actor_obj = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, obj_string.c_str()));
@@ -198,21 +193,18 @@ namespace RC::Unreal
                 // Manually iterating fields here because 'ForEachProperty' isn't ready until after this function is done
                 FField* field = actor_obj->GetChildProperties();
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] find_all_property_types: first field=%p\n", (void*)field);
                 int field_count = 0;
 #endif
                 while (field)
                 {
 #ifdef __linux__
                     if (field_count < 5) {
-                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d]=%p\n", field_count, (void*)field);
                     }
 #endif
                     // Hard-coded offset cast here because 'FField::GetClass' is not ready until after this function is done
                     FFieldClass* ffield_class = Helper::Casting::ptr_cast_deref<FFieldClass*>(field, FFieldClassOffset);
 #ifdef __linux__
                     if (field_count < 5) {
-                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] ffield_class=%p\n", field_count, (void*)ffield_class);
                     }
 #endif
                     if (!ffield_class)
@@ -227,7 +219,6 @@ namespace RC::Unreal
                     FName type_name = ffield_class->GetFName();
 #ifdef __linux__
                     if (field_count < 50) {
-                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] type_name cmp=0x%x\n", field_count, (unsigned)type_name.GetComparisonIndex().ToUnstableInt());
                         fflush(stderr);
                     }
 #endif
@@ -235,7 +226,6 @@ namespace RC::Unreal
                     // Populate the global FFieldClass maps for dynamic type lookup
 #ifdef __linux__
                     if (field_count < 50) {
-                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] about to Contains()\n", field_count);
                         fflush(stderr);
                     }
 #endif
@@ -243,7 +233,6 @@ namespace RC::Unreal
                     {
 #ifdef __linux__
                         if (field_count < 50) {
-                            fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] about to Add()\n", field_count);
                             fflush(stderr);
                         }
 #endif
@@ -252,13 +241,11 @@ namespace RC::Unreal
                             FFieldClass::GetAllFieldClasses().Add(ffield_class);
 #ifdef __linux__
                             if (field_count < 50) {
-                                fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] Add() succeeded\n", field_count);
                                 fflush(stderr);
                             }
 #endif
                         } catch (const std::exception& e) {
 #ifdef __linux__
-                            fprintf(stderr, "[UE4SS] find_all_property_types: Add() EXCEPTION: %s\n", e.what());
                             fflush(stderr);
 #endif
                         }
@@ -270,7 +257,6 @@ namespace RC::Unreal
                     // Fully supported
 #ifdef __linux__
                     if (field_count < 50) {
-                        fprintf(stderr, "[UE4SS] find_all_property_types: field[%d] about to compare type_name\n", field_count);
                         fflush(stderr);
                     }
 #endif
@@ -630,7 +616,6 @@ namespace RC::Unreal
 #ifdef __linux__
                     ++field_count;
                     if (field_count < 50 && field) {
-                        fprintf(stderr, "[UE4SS] find_all_property_types: next field[%d]=%p\n", field_count, (void*)field);
                         fflush(stderr);
                     }
 #endif
@@ -784,7 +769,6 @@ namespace RC::Unreal
         }
 
 #ifdef __linux__
-        fprintf(stderr, "[UE4SS] store_all_object_types: about to return true\n");
 #endif
         return true;
     }

@@ -110,7 +110,7 @@ static void ue4ss_sigsegv_handler(int sig, siginfo_t* info, void* ucontext)
     uintptr_t rdx = uc ? uc->uc_mcontext.gregs[REG_RDX] : 0;
     uintptr_t rax = uc ? uc->uc_mcontext.gregs[REG_RAX] : 0;
     uintptr_t fault_addr = info ? (uintptr_t)info->si_addr : 0;
-    fprintf(stderr, "[UE4SS] signal handler: sig=%d alloc=%d iter=%d mod=%d init=%d rip=0x%lx fault=0x%lx rdi=0x%lx rsi=0x%lx rdx=0x%lx rax=0x%lx\n", sig, s_has_alloc_jmpbuf, s_has_iter_jmpbuf, s_has_mod_jmpbuf, s_has_jmpbuf, (unsigned long)rip, (unsigned long)fault_addr, (unsigned long)rdi, (unsigned long)rsi, (unsigned long)rdx, (unsigned long)rax);
+    UE4SS_ERR("[UE4SS] signal handler: sig=%d alloc=%d iter=%d mod=%d init=%d rip=0x%lx fault=0x%lx rdi=0x%lx rsi=0x%lx rdx=0x%lx rax=0x%lx\n", sig, s_has_alloc_jmpbuf, s_has_iter_jmpbuf, s_has_mod_jmpbuf, s_has_jmpbuf, (unsigned long)rip, (unsigned long)fault_addr, (unsigned long)rdi, (unsigned long)rsi, (unsigned long)rdx, (unsigned long)rax);
     // Check per-call allocator recovery first (FMemory::Malloc/Realloc/Free)
     if (s_has_alloc_jmpbuf)
     {
@@ -166,14 +166,12 @@ extern "C" bool ue4ss_with_iter_recovery(const std::function<void()>& func)
     if (sig != 0)
     {
         s_has_iter_jmpbuf = false;
-        fprintf(stderr, "[UE4SS] iter recovery: caught signal %d, skipping item\n", sig);
+        UE4SS_DBG("[UE4SS] iter recovery: caught signal %d, skipping item\n", sig);
         return false;
     }
     s_has_iter_jmpbuf = true;
-    fprintf(stderr, "[UE4SS] iter recovery: SET (jmpbuf active)\n");
     func();
     s_has_iter_jmpbuf = false;
-    fprintf(stderr, "[UE4SS] iter recovery: CLEAR (callback completed normally)\n");
     return true;
 }
 

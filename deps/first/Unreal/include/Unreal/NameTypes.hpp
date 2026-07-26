@@ -247,9 +247,6 @@ namespace RC::Unreal
         {
             if (!ConstructorInternal.is_ready() && !FunctionAddressOverride) 
             {
-#ifdef __linux__
-                fprintf(stderr, "[UE4SS] construct_with_string: ConstructorInternal NOT ready! StrName=%p fn_addr=%p\n", (void*)StrName, FunctionAddressOverride);
-#endif
                 return; 
             }
 
@@ -262,21 +259,6 @@ namespace RC::Unreal
             DisplayIndex = Name.DisplayIndex;
 #endif
             Number = Name.Number;
-#ifdef __linux__
-            {
-                static thread_local int s_log_count = 0;
-                if (s_log_count < 20)
-                {
-                    ++s_log_count;
-                    char buf[128] = {};
-                    int k = 0;
-                    if (StrName) { for (; k < 64 && StrName[k]; ++k) { buf[k] = static_cast<char>(StrName[k]); } }
-                    fprintf(stderr, "[UE4SS] construct_with_string: \"%s\" -> cmp=0x%x number=%u (fn_ready=%d)\n",
-                            buf, (unsigned)ComparisonIndex.ToUnstableInt(), (unsigned)Number, (int)ConstructorInternal.is_ready());
-                    fflush(stderr);
-                }
-            }
-#endif
 
             // Reset the address to what it was before it was overridden by a temporary address
             if (FunctionAddressOverride) { ConstructorInternal.reset_address(); }

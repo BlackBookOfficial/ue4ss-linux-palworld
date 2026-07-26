@@ -607,7 +607,7 @@ namespace RC::Unreal::UnrealInitializer
             Signatures::ScanResult override_result;
             std::vector<SignatureContainer> empty_containers;
 
-            fprintf(stderr, "[UE4SS] ScanGame: calling ScanOverrides directly on Linux...\n");
+            Output::send(STR("ScanGame: calling ScanOverrides directly on Linux...\n"));
 
             // First pass overrides
             if (UnrealConfig.ScanOverrides.version_finder)
@@ -647,7 +647,7 @@ namespace RC::Unreal::UnrealInitializer
             {
                 Output::send(msg);
             }
-            fprintf(stderr, "[UE4SS] ScanGame: ScanOverrides completed on Linux.\n");
+            Output::send(STR("ScanGame: ScanOverrides completed on Linux.\n"));
         }
 #endif
 
@@ -678,7 +678,7 @@ namespace RC::Unreal::UnrealInitializer
                 !ctx.config.gameengine_tick)
             {
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] ScanGame: skipping first pass DoScan on Linux (overrides set, scanner crashes with empty containers)\n");
+                Output::send(STR("ScanGame: skipping first pass DoScan on Linux (overrides set)\n"));
 #else
                 Output::send<LogLevel::Default>(STR("Running first pass of Lua override scans\n"));
                 DoScan(&Signatures::ScanForGameFunctionsAndData);
@@ -687,11 +687,11 @@ namespace RC::Unreal::UnrealInitializer
         }
 
 #ifdef __linux__
-        fprintf(stderr, "[UE4SS] ScanGame: calling InitializeVersionedContainer()...\n");
+        Output::send(STR("ScanGame: calling InitializeVersionedContainer()...\n"));
 #endif
         InitializeVersionedContainer();
 #ifdef __linux__
-        fprintf(stderr, "[UE4SS] ScanGame: InitializeVersionedContainer() done.\n");
+        Output::send(STR("ScanGame: InitializeVersionedContainer() done.\n"));
         // Palworld-specific vtable override.
         //
         // Palworld's UE5.1 build has an extra virtual function slot in the UObject
@@ -725,8 +725,7 @@ namespace RC::Unreal::UnrealInitializer
                 UObject::VTableLayoutMap[STR("GetFunctionCallspace")] = 0x270;
                 UObject::VTableLayoutMap[STR("CallRemoteFunction")] = 0x278;
                 UObject::VTableLayoutMap[STR("ProcessConsoleExec")] = 0x280;
-                fprintf(stderr, "[UE4SS] Palworld vtable override: ProcessEvent=0x268 "
-                        "GetFunctionCallspace=0x270 CallRemoteFunction=0x278 ProcessConsoleExec=0x280\n");
+                Output::send(STR("Palworld vtable override: ProcessEvent=0x268 GetFunctionCallspace=0x270 CallRemoteFunction=0x278 ProcessConsoleExec=0x280\n"));
             }
         }
 #endif
@@ -758,7 +757,7 @@ namespace RC::Unreal::UnrealInitializer
                 !ctx.config.gnatives)
             {
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] ScanGame: skipping second pass DoScan on Linux (overrides set, scanner crashes with empty containers)\n");
+                Output::send(STR("ScanGame: skipping second pass DoScan on Linux (overrides set)\n"));
 #else
                 Output::send<LogLevel::Default>(STR("Running second pass of Lua override scans\n"));
                 DoScan(&Signatures::ScanForGUObjectArray);
@@ -767,7 +766,7 @@ namespace RC::Unreal::UnrealInitializer
         }
 
 #ifdef __linux__
-        fprintf(stderr, "[UE4SS] ScanGame: setting bScanFullyCompleted = true.\n");
+        Output::send(STR("ScanGame: setting bScanFullyCompleted = true.\n"));
 #endif
         StaticStorage::bScanFullyCompleted = true;
     }
@@ -854,11 +853,11 @@ namespace RC::Unreal::UnrealInitializer
         if (!StaticStorage::bScanFullyCompleted)
         {
 #ifdef __linux__
-            fprintf(stderr, "[UE4SS] Initialize: calling ScanGame()...\n");
+            Output::send(STR("Initialize: calling ScanGame()...\n"));
 #endif
             ScanGame();
 #ifdef __linux__
-            fprintf(stderr, "[UE4SS] Initialize: ScanGame() done.\n");
+            Output::send(STR("Initialize: ScanGame() done.\n"));
 #endif
         }
 
@@ -868,13 +867,13 @@ namespace RC::Unreal::UnrealInitializer
         // If not, skip everything since all post-scan init requires GUObjectArray.
         if (!Unreal::GUObjectArray)
         {
-            fprintf(stderr, "[UE4SS] Initialize: GUObjectArray not found, skipping post-scan init (stripped binary)\n");
+            Output::send(STR("Initialize: GUObjectArray not found, skipping post-scan init (stripped binary)\n"));
             StaticStorage::bIsInitialized = true;
             Output::send(STR("Using engine version: {}.{}\n"), Version::Major, Version::Minor);
             Output::send<LogLevel::Warning>(STR("Linux limited mode: UE function addresses not resolved (stripped binary). Mod functionality will be limited.\n"));
             return;
         }
-        fprintf(stderr, "[UE4SS] Initialize: GUObjectArray found, proceeding with full post-scan init\n");
+        Output::send(STR("Initialize: GUObjectArray found, proceeding with full post-scan init\n"));
 #endif
 #ifdef __linux__
         // Palworld's optimized Clang/LTO build has no standalone FName(string,
@@ -945,8 +944,7 @@ namespace RC::Unreal::UnrealInitializer
                 auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - wait_start).count();
                 if (elapsed % 10 == 0 && elapsed > 0)
                 {
-                    fprintf(stderr, "[UE4SS] Waiting for object construction: %d elements (elapsed %lds)\n",
-                            (int)UObjectArray::GetNumElements(), (long)elapsed);
+                    Output::send(STR("Waiting for object construction: {} elements (elapsed {}s)\n"), UObjectArray::GetNumElements(), elapsed);
                 }
 #endif
             }
@@ -956,7 +954,7 @@ namespace RC::Unreal::UnrealInitializer
         // the wrong address. Skip PostInitialize to avoid crashing on object iteration.
         if (UObjectArray::GetNumElements() == 0)
         {
-            fprintf(stderr, "[UE4SS] Initialize: GUObjectArray has 0 elements (wrong address?), skipping PostInitialize\n");
+            Output::send(STR("Initialize: GUObjectArray has 0 elements (wrong address?), skipping PostInitialize\n"));
             Output::send<LogLevel::Warning>(STR("Linux limited mode: GUObjectArray address appears invalid (0 elements). Mod functionality will be limited.\n"));
             StaticStorage::bIsInitialized = true;
             return;
@@ -979,7 +977,7 @@ namespace RC::Unreal::UnrealInitializer
             {
                 KismetStringLibrary = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings({STR("/Script/Engine"), STR("KismetStringLibrary")}));
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] KSL lookup: result=%p\n", (void*)KismetStringLibrary);
+                Output::send(STR("KSL lookup: result={}\n"), (void*)KismetStringLibrary);
 #endif
                 if (!KismetStringLibrary)
                 {
@@ -996,8 +994,7 @@ namespace RC::Unreal::UnrealInitializer
         }
         else
         {
-            fprintf(stderr, "[UE4SS] Skipping KismetStringLibrary lookup (GUObjectArray has only %d elements)\n",
-                    (int)UObjectArray::GetNumElements());
+            Output::send(STR("Skipping KismetStringLibrary lookup (GUObjectArray has only {} elements)\n"), UObjectArray::GetNumElements());
         }
 #endif
         // For some games, it's found in GUObjectArray, and in other games, it's found in the function linked list.
@@ -1007,17 +1004,17 @@ namespace RC::Unreal::UnrealInitializer
             while (!FName::Conv_NameToStringInternal && KismetStringLibrary)
             {
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] Looking for Conv_NameToString via GetFunctionByName...\n");
+                Output::send(STR("Looking for Conv_NameToString via GetFunctionByName...\n"));
 #endif
                 FName::Conv_NameToStringInternal = KismetStringLibrary->GetFunctionByName(FName(STR("Conv_NameToString"), FNAME_Find));
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] GetFunctionByName result: %p\n", (void*)FName::Conv_NameToStringInternal);
+                Output::send(STR("GetFunctionByName result: {}\n"), (void*)FName::Conv_NameToStringInternal);
 #endif
                 if (!FName::Conv_NameToStringInternal)
                 {
                     FName::Conv_NameToStringInternal = static_cast<UFunction*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings({STR("/Script/Engine"), STR("KismetStringLibrary"), STR("Conv_NameToString")}));
 #ifdef __linux__
-                    fprintf(stderr, "[UE4SS] StaticFindObject fallback result: %p\n", (void*)FName::Conv_NameToStringInternal);
+                    Output::send(STR("StaticFindObject fallback result: {}\n"), (void*)FName::Conv_NameToStringInternal);
 #endif
                 }
                 if (!FName::Conv_NameToStringInternal)
@@ -1037,11 +1034,11 @@ namespace RC::Unreal::UnrealInitializer
             while (!FName::KismetStringLibraryCDO && KismetStringLibrary)
             {
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] Calling GetClassDefaultObject() on KSL=0x%lx...\n", (uintptr_t)KismetStringLibrary);
+                Output::send(STR("Calling GetClassDefaultObject() on KSL...\n"));
 #endif
                 FName::KismetStringLibraryCDO = KismetStringLibrary->GetClassDefaultObject();
 #ifdef __linux__
-                fprintf(stderr, "[UE4SS] CDO result: %p\n", (void*)FName::KismetStringLibraryCDO);
+                Output::send(STR("CDO result: {}\n"), (void*)FName::KismetStringLibraryCDO);
 #endif
                 if (!FName::KismetStringLibraryCDO)
                 {
@@ -1056,8 +1053,7 @@ namespace RC::Unreal::UnrealInitializer
         }
 
 #ifdef __linux__
-        fprintf(stderr, "[UE4SS] KSL setup complete: KSL=%p Conv=%p CDO=%p NumElements=%d\n",
-                (void*)KismetStringLibrary, (void*)FName::Conv_NameToStringInternal, (void*)FName::KismetStringLibraryCDO, (int)UObjectArray::GetNumElements());
+        Output::send(STR("KSL setup complete: KSL={} Conv={} CDO={} NumElements={}\n"), (void*)KismetStringLibrary, (void*)FName::Conv_NameToStringInternal, (void*)FName::KismetStringLibraryCDO, UObjectArray::GetNumElements());
 #endif
 
 #ifdef __linux__
@@ -1067,8 +1063,6 @@ namespace RC::Unreal::UnrealInitializer
         // with limited functionality. Lua mods can still start without hooks.
         if (UObjectArray::GetNumElements() < 1000)
         {
-            fprintf(stderr, "[UE4SS] Initialize: GUObjectArray has only %d elements, skipping PostInitialize (hooks/required objects)\n",
-                    (int)UObjectArray::GetNumElements());
             Output::send<LogLevel::Warning>(STR("Linux limited mode: GUObjectArray has only {} elements. Hooks and required object checks skipped. Mods will have limited functionality.\n"), UObjectArray::GetNumElements());
             StaticStorage::bIsInitialized = true;
             return;
@@ -1353,14 +1347,14 @@ namespace RC::Unreal::UnrealInitializer
         }
 
 #ifdef __linux__
-        fprintf(stderr, "[UE4SS] Calling store_all_object_types()...\n");
+        Output::send(STR("Calling store_all_object_types()...\n"));
 #endif
         if (!TypeChecker::store_all_object_types())
         {
             Output::send<LogLevel::Warning>(STR("Warning: TypeChecker was unable to find some or all of the required core objects (continuing in limited mode)\n"));
         }
 #ifdef __linux__
-        fprintf(stderr, "[UE4SS] store_all_object_types() completed\n");
+        Output::send(STR("store_all_object_types() completed\n"));
 #endif
 
         if (UnrealConfig.bHookProcessInternal || UnrealConfig.bHookProcessLocalScriptFunction)
@@ -1436,7 +1430,7 @@ namespace RC::Unreal::UnrealInitializer
         Output::send<LogLevel::Verbose>(STR("UnrealConfig.FExecVTableOffsetInLocalPlayer: {:X}\n"), UnrealConfig.FExecVTableOffsetInLocalPlayer);
 
 #ifdef __linux__
-        fprintf(stderr, "[UE4SS] About to skip PostInitialize...\n");
+        Output::send(STR("About to skip PostInitialize...\n"));
 #endif
 #ifdef __linux__
         // On Linux, PostInitialize calls ForEachUObject with a callback that does
