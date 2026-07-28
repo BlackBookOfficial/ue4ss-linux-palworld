@@ -12,6 +12,10 @@
 #include <fmt/core.h>
 #include <fmt/xchar.h>
 
+#include <cstdio>
+
+#include <DynamicOutput/Output.hpp>
+
 #include <Unreal/Core/Containers/FString.hpp>
 #include <Unreal/Core/Containers/FUtf8String.hpp>
 #include <Unreal/Core/Containers/FAnsiString.hpp>
@@ -129,18 +133,66 @@ namespace RC::Unreal
                 if (g_engine_find_name) { break; }
             }
             fclose(maps);
+            if (!g_engine_find_name)
+            {
+                // Log once: on failure every FName construction silently returns
+                // None, which otherwise surfaces as inexplicable mod breakage.
+                static bool scan_failure_logged = false;
+                if (!scan_failure_logged)
+                {
+                    scan_failure_logged = true;
+                    Output::send<LogLevel::Error>(STR("PalworldNameProvider: engine find-or-add signature not found. All FName string construction will return None. The Palworld binary likely changed (game update); kWrapperSig in NameTypes.cpp needs updating.\n"));
+                }
+            }
             return g_engine_find_name;
         }
 
         // Native FName(const CharType*, EFindName) backend for Linux/Palworld.
         // Delegates to the engine's own find-or-add name lookup and constructs an
-        // FName from the returned ComparisonIndex. Number is left 0 (callers that
-        // need a numbered name set it afterwards via the FName(str, num, ...) ctor).
+        // FName from the returned ComparisonIndex. The Number field replicates the
+        // engine's "_N" suffix parsing (see below) so constructed names compare
+        // equal to engine-created names.
         auto FindName(const CharType* StrName, EFindName FindType) -> FName
         {
             if (!StrName) { return FName{}; }
             auto fn = LocateEngineFindName();
             if (!fn) { return FName{}; }
+
+            // UE FName convention (FName::Init / SplitNameWithNumber): a trailing
+            // "_N" suffix is split off — "BountyProof_1" resolves to the BASE name
+            // "BountyProof" (ComparisonIndex) with a STORED Number of N + 1.
+            // Stored Number 0 means "no suffix" (NAME_NO_NUMBER_INTERNAL), and
+            // ToString prints Number - 1, so stored Number 2 displays as "_1".
+            //
+            // The engine's find-or-add performs this split internally and returns
+            // the base name's ComparisonIndex. We must replicate the Number side
+            // or FName equality (ComparisonIndex + Number) against engine-created
+            // names — e.g. inventory item StaticIDs — fails. Verified empirically:
+            // stored Number must be suffix + 1; storing the raw suffix (Number 1
+            // for "_1") does NOT match game items.
+            uint32_t parsed_number = 0;
+            StringType base_name(StrName);
+            const size_t len = base_name.size();
+            if (len > 2)
+            {
+                size_t digit_start = len;
+                while (digit_start > 0 && base_name[digit_start - 1] >= '0' && base_name[digit_start - 1] <= '9')
+                {
+                    --digit_start;
+                }
+                // Need at least one digit, a '_' before the digits, and at most 9
+                // digits (larger suffixes don't occur in practice and overflow
+                // even the engine's own parsing).
+                if (digit_start < len && digit_start > 0 && base_name[digit_start - 1] == '_' && len - digit_start <= 9)
+                {
+                    uint32_t num = 0;
+                    for (size_t i = digit_start; i < len; ++i)
+                    {
+                        num = num * 10 + static_cast<uint32_t>(base_name[i] - '0');
+                    }
+                    parsed_number = num + 1; // stored Number = suffix + 1
+                }
+            }
 
             // The engine wrapper writes a 64-bit value: high 32 = hash, low 32 =
             // ComparisonIndex. We only need the ComparisonIndex (low 32 bits).
@@ -154,7 +206,7 @@ namespace RC::Unreal
 #if WITH_CASE_PRESERVING_NAME
             name.DisplayIndex = name.ComparisonIndex;
 #endif
-            name.Number = 0;
+            name.Number = parsed_number;
             return name;
         }
     } // namespace PalworldNameProvider
