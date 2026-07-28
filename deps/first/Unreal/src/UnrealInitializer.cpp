@@ -751,6 +751,13 @@ namespace RC::Unreal::UnrealInitializer
                 AActor::VTableLayoutMap[STR("BeginPlay")] = 0x388;
                 AActor::VTableLayoutMap[STR("EndPlay")] = 0x390;
 
+                // AGameModeBase (inherits AActor's expanded region): real
+                // InitGameState is at 0x740, not baked 0x738. Verified: six
+                // GameMode-family vtables consistently hold 0xa3b5000 at 0x740,
+                // and the one overriding class's wrapper at 0x740 chains into
+                // 0xa3b5000 with rdi only (void(AGameModeBase*)).
+                AGameModeBase::VTableLayoutMap[STR("InitGameState")] = 0x740;
+
                 // FProperty vtable: same pattern — extra slot between
                 // InstanceSubobjects (0x140) and GetMinAlignment (0x148),
                 // shifting GetMinAlignment and subsequent virtuals by +8.
