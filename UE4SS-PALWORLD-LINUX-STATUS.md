@@ -18,8 +18,8 @@ with the full hook set enabled. Server stable at 118–119 FPS.
 | EngineTick | `HookEngineTick=true` (default) | `0xaa39580` (slot `0x2F0`) | Working — 30h-stable |
 | ProcessLocalScriptFunction | `HookProcessLocalScriptFunction=true` | AOB scan | Working — survived player join (fixed by thunk-aware JMP resolution) |
 | StaticConstructObject | always on | AOB scan | Working |
-| CallFunctionByNameWithArguments | `HookCallFunctionByNameWithArguments=false` | — | **Untested since thunk fix** — retest pending |
-| UObjectProcessEvent | `HookUObjectProcessEvent=false` | — | **Untested since thunk fix** — retest pending |
+| CallFunctionByNameWithArguments | `HookCallFunctionByNameWithArguments=true` | AOB scan | Working — survived player join (thunk fix) |
+| UObjectProcessEvent | `HookUObjectProcessEvent=true` | `0x7b4c080` | Working — survived player join |
 
 ## Verified Palworld vtable offsets (differ from upstream 5.1 dump)
 
