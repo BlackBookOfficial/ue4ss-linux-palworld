@@ -184,6 +184,16 @@ namespace RC::Unreal::Hook::Internal
                 }
             }
 
+#ifdef __linux__
+            // Validate the resolved Exec target before detouring (see
+            // UnrealInitializer.hpp:validate_hook_target).
+            if (auto* resolved_exec = TargetFunction->get_function_address();
+                resolved_exec && !UnrealInitializer::validate_hook_target(STR("ULocalPlayer::Exec"), resolved_exec, UnrealInitializer::HookShape::ManyArgs))
+            {
+                return false;
+            }
+#endif
+
             return Base::InstallHook();
         }
 

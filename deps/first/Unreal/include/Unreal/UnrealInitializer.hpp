@@ -114,6 +114,27 @@ namespace RC::Unreal::UnrealInitializer
         bool bShouldSerializeCache;
     };
 
+#ifdef __linux__
+    // Expected register-usage shape of a hook target's signature. Used to
+    // validate vtable-resolved addresses before detouring them: after a game
+    // update shuffles vtable slots, detouring a mismatched function marshals
+    // garbage arguments and crashes minutes later. Refusal leaves the hook
+    // unavailable — degraded but stable. See UE4SS-PALWORLD-LINUX-STATUS.md.
+    enum class HookShape
+    {
+        OnePtrArg,    // void(T*)                          — BeginPlay, InitGameState
+        PtrAndInt,    // void(T*, int/enum)                — EndPlay(EEndPlayReason)
+        PtrFloat,     // void(T*, float)                   — AActor::Tick, GameViewportClient::Tick
+        PtrFloatBool, // void(T*, float, bool)             — UEngine::Tick
+        ThreePtr,     // void(T*, void*, void*)            — ProcessEvent
+        ManyArgs,     // 4+ args (LoadMap, ProcessConsoleExec, LocalPlayerExec): prologue sanity only
+    };
+
+    // Disassembles the prologue of `target` and checks its register-usage
+    // shape against `shape`. Logs a loud warning and returns false on refusal.
+    auto validate_hook_target(File::StringViewType name, void* target, HookShape shape) -> bool;
+#endif
+
     struct StaticStorage
     {
         static std::filesystem::path GameExe;

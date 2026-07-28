@@ -301,6 +301,168 @@ namespace RC::Unreal::UnrealInitializer
 #endif
     }
 
+#ifdef __linux__
+    // Implementation of the hook-target validation gate declared in
+    // UnrealInitializer.hpp.
+    // Disassembles the prologue of `target` (up to the first CALL) and counts
+    // argument registers read before being written. Returns true when the
+    // target is consistent with `shape`. Logs a loud warning when refusing.
+    auto validate_hook_target(File::StringViewType name, void* target, HookShape shape) -> bool
+    {
+        if (!target)
+        {
+            return false;
+        }
+
+        ZydisDecoder decoder;
+        ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+        ZydisDecodedInstruction insn{};
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT]{};
+
+        bool int_arg_read[5]{};    // rsi, rdx, rcx, r8, r9 (rdi = 'this', always read)
+        bool int_arg_written[5]{}; // repurposed registers no longer count as argument evidence
+        bool xmm_read = false;
+        bool xmm_written[8]{};
+        bool sane_prologue = false;
+        int decoded = 0;
+        ZyanUSize offset = 0;
+        auto* code = static_cast<ZyanU8*>(target);
+
+        auto arg_slot = [](ZydisRegister reg) -> int {
+            switch (reg)
+            {
+            case ZYDIS_REGISTER_RSI: return 0;
+            case ZYDIS_REGISTER_RDX: return 1;
+            case ZYDIS_REGISTER_RCX: return 2;
+            case ZYDIS_REGISTER_R8:  return 3;
+            case ZYDIS_REGISTER_R9:  return 4;
+            default: return -1;
+            }
+        };
+
+        while (offset < 0x60 && decoded < 24 && ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, code + offset, 0x60 - offset, &insn, operands)))
+        {
+            if (decoded < 2 && (insn.mnemonic == ZYDIS_MNEMONIC_PUSH || insn.mnemonic == ZYDIS_MNEMONIC_SUB ||
+                                (insn.mnemonic == ZYDIS_MNEMONIC_MOV && insn.operand_count_visible >= 2)))
+            {
+                sane_prologue = true;
+            }
+            // PUSH/POP save and restore registers (often just for stack
+            // alignment) — they are not argument usage and must be ignored.
+            if (insn.mnemonic == ZYDIS_MNEMONIC_PUSH || insn.mnemonic == ZYDIS_MNEMONIC_POP)
+            {
+                offset += insn.length;
+                ++decoded;
+                continue;
+            }
+            // Reads first (evidence of incoming argument values), then writes
+            // (register repurposed — later reads no longer prove anything).
+            for (ZyanU8 phase = 0; phase < 2; ++phase)
+            {
+                const bool want_read = (phase == 0);
+                for (ZyanU8 i = 0; i < insn.operand_count_visible; ++i)
+                {
+                    const auto& op = operands[i];
+                    if (op.type != ZYDIS_OPERAND_TYPE_REGISTER)
+                    {
+                        continue;
+                    }
+                    const bool is_read = (op.actions & ZYDIS_OPERAND_ACTION_READ) != 0;
+                    const bool is_write = (op.actions & ZYDIS_OPERAND_ACTION_WRITE) != 0;
+                    // Phase 0 processes any operand that reads (even read+write);
+                    // phase 1 processes any operand that writes.
+                    if ((want_read && !is_read) || (!want_read && !is_write))
+                    {
+                        continue;
+                    }
+                    const ZydisRegister enclosing = ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LONG_64, op.reg.value);
+                    if (const int slot = arg_slot(enclosing); slot >= 0)
+                    {
+                        if (want_read)
+                        {
+                            if (!int_arg_written[slot]) { int_arg_read[slot] = true; }
+                        }
+                        else
+                        {
+                            int_arg_written[slot] = true;
+                        }
+                    }
+                    else if (op.reg.value >= ZYDIS_REGISTER_XMM0 && op.reg.value <= ZYDIS_REGISTER_XMM7)
+                    {
+                        const int xslot = op.reg.value - ZYDIS_REGISTER_XMM0;
+                        if (want_read)
+                        {
+                            if (!xmm_written[xslot]) { xmm_read = true; }
+                        }
+                        else
+                        {
+                            xmm_written[xslot] = true;
+                        }
+                    }
+                }
+            }
+            offset += insn.length;
+            ++decoded;
+        }
+
+        if (!sane_prologue || decoded == 0)
+        {
+            Output::send<LogLevel::Warning>(STR("Palworld hook validation REFUSED {} at {}: no sane prologue (game updated? hook left disabled)\n"),
+                                            name, target);
+            return false;
+        }
+
+        const int int_args_used = (int_arg_read[0] ? 1 : 0) + (int_arg_read[1] ? 1 : 0) + (int_arg_read[2] ? 1 : 0) +
+                                  (int_arg_read[3] ? 1 : 0) + (int_arg_read[4] ? 1 : 0);
+
+        // Verdict policy — refuse ONLY the crash classes proven against this
+        // binary (junk targets above; register-class truncation below), warn
+        // on everything else. Strict shape matching is not viable: forwarding
+        // wrappers never touch the float registers they forward, and verified-
+        // working functions read extra argument registers the detour signature
+        // doesn't know (the trampoline passes them through unharmed).
+        bool ok = true;
+        File::StringViewType why = STR("");
+        switch (shape)
+        {
+        case HookShape::PtrFloat:
+            // void(T*, float): rsi/rdx must be dead. A target reading them is a
+            // wider function; detour marshaling would truncate/forward garbage.
+            ok = !int_arg_read[0] && !int_arg_read[1];
+            why = STR("target reads extra int-arg registers (crash class: float/int register mismatch)");
+            break;
+        case HookShape::PtrFloatBool:
+            // void(T*, float, bool): rsi may hold the bool; rdx/rcx must be dead.
+            ok = !int_arg_read[1] && !int_arg_read[2];
+            why = STR("target reads extra int-arg registers (crash class: float/int register mismatch)");
+            break;
+        case HookShape::OnePtrArg:
+        case HookShape::PtrAndInt:
+        case HookShape::ThreePtr:
+        case HookShape::ManyArgs:
+            // Pointer-shaped extra args pass through the trampoline unharmed
+            // (proven by verified-working hooks). Warn for diagnostics only.
+            if (int_args_used > 0)
+            {
+                Output::send<LogLevel::Warning>(
+                        STR("Palworld hook validation NOTE {} at {}: target reads {} extra int-arg register(s) beyond the detour signature; installing anyway (trampoline pass-through). If this hook misbehaves after a game update, re-derive its slot.\n"),
+                        name, target, int_args_used);
+            }
+            break;
+        }
+
+        if (!ok)
+        {
+            Output::send<LogLevel::Warning>(STR("Palworld hook validation REFUSED {} at {}: {} (int-arg regs used: {}; game updated? hook left disabled)\n"),
+                                            name, target, why, int_args_used);
+        }
+        return ok;
+    }
+#define UE4SS_VALIDATE_HOOK(hook_name, addr, hook_shape) validate_hook_target(hook_name, addr, hook_shape)
+#else
+#define UE4SS_VALIDATE_HOOK(hook_name, addr, hook_shape) (true)
+#endif
+
     auto InitializeVersionedContainer() -> void
     {
         Container::SetDerivedBaseObjects();
@@ -1236,7 +1398,8 @@ namespace RC::Unreal::UnrealInitializer
 
         if (UnrealConfig.bHookLoadMap && GameEngine)
         {
-            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UEngine, LoadMap, GameEngine); func_address)
+            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UEngine, LoadMap, GameEngine);
+                func_address && UE4SS_VALIDATE_HOOK(STR("GameEngine::LoadMap"), func_address, HookShape::ManyArgs))
             {
                 Output::send(STR("GameEngine::LoadMap address {}\n"), func_address);
                 UEngine::LoadMapInternal.assign_address(func_address);
@@ -1245,6 +1408,12 @@ namespace RC::Unreal::UnrealInitializer
         if (UnrealConfig.bHookEngineTick && GameEngine)
         {
             auto vtable_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UEngine, Tick, GameEngine);
+#ifdef __linux__
+            if (vtable_address && !validate_hook_target(STR("GameEngine::Tick"), vtable_address, HookShape::PtrFloatBool))
+            {
+                vtable_address = nullptr; // refused: existing logic falls back to the scan address
+            }
+#endif
             auto scan_address = UEngine::TickInternal.get_function_address();
 
             Output::send(STR("GameEngine::Tick address (vtable: {}; scan: {})\n"), vtable_address, scan_address);
@@ -1313,7 +1482,8 @@ namespace RC::Unreal::UnrealInitializer
         }
         if (UnrealConfig.bHookInitGameState && GameMode)
         {
-            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AGameModeBase, InitGameState, GameMode); func_address)
+            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AGameModeBase, InitGameState, GameMode);
+                func_address && UE4SS_VALIDATE_HOOK(STR("AGameModeBase::InitGameState"), func_address, HookShape::OnePtrArg))
             {
                 Output::send(STR("GameModeBase::InitGameState address {}\n"), func_address);
                 AGameModeBase::InitGameStateInternal.assign_address(func_address);
@@ -1321,7 +1491,8 @@ namespace RC::Unreal::UnrealInitializer
         }
         if (UnrealConfig.bHookBeginPlay && Actor)
         {
-            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, BeginPlay, Actor); func_address)
+            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, BeginPlay, Actor);
+                func_address && UE4SS_VALIDATE_HOOK(STR("AActor::BeginPlay"), func_address, HookShape::OnePtrArg))
             {
                 Output::send(STR("AActor::BeginPlay address {}\n"), func_address);
                 AActor::BeginPlayInternal.assign_address(func_address);
@@ -1329,7 +1500,8 @@ namespace RC::Unreal::UnrealInitializer
         }
         if (UnrealConfig.bHookEndPlay && Actor)
         {
-            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, EndPlay, Actor); func_address)
+            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, EndPlay, Actor);
+                func_address && UE4SS_VALIDATE_HOOK(STR("AActor::EndPlay"), func_address, HookShape::PtrAndInt))
             {
                 Output::send(STR("AActor::EndPlay address {}\n"), func_address);
                 AActor::EndPlayInternal.assign_address(func_address);
@@ -1337,7 +1509,8 @@ namespace RC::Unreal::UnrealInitializer
         }
         if (UnrealConfig.bHookAActorTick && Actor)
         {
-            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, Tick, Actor); func_address)
+            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, Tick, Actor);
+                func_address && UE4SS_VALIDATE_HOOK(STR("AActor::Tick"), func_address, HookShape::PtrFloat))
             {
                 Output::send(STR("AActor::Tick address {}\n"), func_address);
                 AActor::TickInternal.assign_address(func_address);
@@ -1345,7 +1518,8 @@ namespace RC::Unreal::UnrealInitializer
         }
         if (UnrealConfig.bHookGameViewportClientTick && GameViewportClient)
         {
-            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UGameViewportClient, Tick, GameViewportClient); func_address)
+            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UGameViewportClient, Tick, GameViewportClient);
+                func_address && UE4SS_VALIDATE_HOOK(STR("UGameViewportClient::Tick"), func_address, HookShape::PtrFloat))
             {
                 Output::send(STR("GameViewportClient::Tick address {}\n"), func_address);
                 UGameViewportClient::TickInternal.assign_address(func_address);
@@ -1353,7 +1527,8 @@ namespace RC::Unreal::UnrealInitializer
         }
         if (UnrealConfig.bHookUObjectProcessEvent && Object)
         {
-            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UObject, ProcessEvent, Object); func_address)
+            if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UObject, ProcessEvent, Object);
+                func_address && UE4SS_VALIDATE_HOOK(STR("UObject::ProcessEvent"), func_address, HookShape::ThreePtr))
             {
                 Output::send(STR("ProcessEvent address {}\n"), func_address);
                 UObject::ProcessEventInternal.assign_address(func_address);
@@ -1361,7 +1536,8 @@ namespace RC::Unreal::UnrealInitializer
         }
         if (UnrealConfig.bHookProcessConsoleExec && Object)
         {
-            if (auto func_address = GET_ADDRESS_OF_UNREAL_VIRTUAL(UObject, ProcessConsoleExec, Object); func_address)
+            if (auto func_address = GET_ADDRESS_OF_UNREAL_VIRTUAL(UObject, ProcessConsoleExec, Object);
+                func_address && UE4SS_VALIDATE_HOOK(STR("UObject::ProcessConsoleExec"), func_address, HookShape::ManyArgs))
             {
                 Output::send(STR("ProcessConsoleExec address {}\n"), func_address);
                 UObject::ProcessConsoleExecInternal.assign_address(func_address);
