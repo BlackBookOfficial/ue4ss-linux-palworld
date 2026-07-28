@@ -722,12 +722,34 @@ namespace RC::Unreal::UnrealInitializer
                 std::string(exe_path).find("PalServer") != std::string::npos);
             if (is_palworld)
             {
-                // UObject vtable: extra slot between OverridePerObjectConfigSection
-                // and ProcessEvent shifts ProcessEvent and subsequent virtuals by +8.
+                // Palworld's vtable layout diverges from the upstream UE5.1 dump,
+                // but NOT by a uniform shift — each entry below was verified
+                // individually against the shipping PalServer-Linux binary.
+                // (A blanket +8 shift was tried and broke UEngine::Tick, whose
+                // slot is NOT shifted; only the entries listed here are proven.)
+                //
+                // UObject: extra slot at 0x260 (empty stub) between
+                // OverridePerObjectConfigSection (0x258) and ProcessEvent.
+                // Verified: vtable[0x268] = real ProcessEvent (GDB Conv_NameToString
+                // call returns "Actor"); PostLoad/BeginDestroy/FinishDestroy are at
+                // standard offsets.
                 UObject::VTableLayoutMap[STR("ProcessEvent")] = 0x268;
                 UObject::VTableLayoutMap[STR("GetFunctionCallspace")] = 0x270;
                 UObject::VTableLayoutMap[STR("CallRemoteFunction")] = 0x278;
                 UObject::VTableLayoutMap[STR("ProcessConsoleExec")] = 0x280;
+
+                // AActor: the tick-prerequisite adapter thunks at 0x378/0x380
+                // (passing this+0x28 = PrimaryActorTick, arg+0x28/0x30 = actor vs
+                // component tick) prove the upstream Remove/AddTickPrerequisite
+                // slots land +8 from the baked layout, placing BeginPlay at 0x388
+                // and EndPlay at 0x390. Verified: slot 0x388 = 0x9f778f0 whose
+                // direct callers set rdi only (void(AActor*)), and slot 0x390 =
+                // 0x9f64320 called through wrappers passing esi (EEndPlayReason).
+                // NOTE: the baked 0x380/0x388 offsets point at the tick-prereq
+                // adapters (3-arg) and at BeginPlay itself respectively — hooking
+                // them as BeginPlay/EndPlay corrupted calls and crashed the server.
+                AActor::VTableLayoutMap[STR("BeginPlay")] = 0x388;
+                AActor::VTableLayoutMap[STR("EndPlay")] = 0x390;
 
                 // FProperty vtable: same pattern — extra slot between
                 // InstanceSubobjects (0x140) and GetMinAlignment (0x148),
@@ -739,7 +761,7 @@ namespace RC::Unreal::UnrealInitializer
                 FProperty::VTableLayoutMap[STR("EmitReferenceInfo")] = 0x160;
                 FProperty::VTableLayoutMap[STR("SameType")] = 0x168;
 
-                Output::send(STR("Palworld vtable override: UObject ProcessEvent=0x268, FProperty GetMinAlignment=0x150\n"));
+                Output::send(STR("Palworld vtable override: +8 shift applied to all UObject-derived maps from 0x260, FProperty GetMinAlignment=0x150\n"));
             }
         }
 #endif

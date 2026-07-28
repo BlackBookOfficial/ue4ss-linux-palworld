@@ -228,7 +228,7 @@ namespace RC
         Hooks.HookCallFunctionByNameWithArguments = get_bool("Hooks", "HookCallFunctionByNameWithArguments", true);
         Hooks.HookBeginPlay = get_bool("Hooks", "HookBeginPlay", true);
         Hooks.HookEndPlay = get_bool("Hooks", "HookEndPlay", true);
-        Hooks.HookLocalPlayerExec = get_bool("Hooks", "HookLocalPlayerExec", false);
+        Hooks.HookLocalPlayerExec = get_bool("Hooks", "HookLocalPlayerExec", true);
         Hooks.HookAActorTick = get_bool("Hooks", "HookAActorTick", false);
         Hooks.HookEngineTick = get_bool("Hooks", "HookEngineTick", true);
         Hooks.HookGameViewportClientTick = get_bool("Hooks", "HookGameViewportClientTick", false);
