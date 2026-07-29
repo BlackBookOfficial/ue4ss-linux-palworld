@@ -458,6 +458,219 @@ namespace RC::Unreal::UnrealInitializer
         }
         return ok;
     }
+
+    // Self-healing vtable sweep. Re-derives AActor::BeginPlay/EndPlay slot
+    // offsets from the binary itself so a Palworld update that shuffles the
+    // AActor region keeps the hooks working without manual re-verification.
+    //
+    // Method (prototyped against the shipping binary; 505 vtables):
+    //  1. AOB-scan the RemoveTickPrerequisiteComponent adjustor thunk
+    //     (test rsi,rsi; je; add rdi,0x28; lea rdx,[rsi+0x30]; jmp).
+    //     Itanium ABI emits this adapter into every AActor-derived vtable;
+    //     it is essentially never overridden (505/505 unanimous).
+    //  2. Every qword in the image equal to the thunk address is a vtable
+    //     slot; the slot immediately AFTER it is BeginPlay (structural
+    //     invariant in both upstream 5.1 and Palworld layouts), +0x10 EndPlay.
+    //  3. For each hit, scan backwards for the AOB-verified ProcessEvent
+    //     address: the distance adapter->ProcessEvent gives the slot geometry
+    //     relative to the (separately verified) ProcessEvent map offset.
+    //  4. Consensus checks: the distance must be near-unanimous and the
+    //     BeginPlay candidate value must dominate (derived classes override
+    //     BeginPlay, so ~52% is expected and healthy).
+    // Any check failure keeps the hardcoded fallback values.
+    auto sweep_actor_vtable_offsets() -> void
+    {
+        // Enumerate this executable's mappings: m_modules_info's SizeOfImage
+        // only covers the first LOAD segment (~66MB); the binary spans ~188MB
+        // and the .text with the adapter thunk is outside the first segment.
+        char exe_path[4096]{};
+        ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+        if (exe_len <= 0)
+        {
+            Output::send<LogLevel::Warning>(STR("Palworld vtable sweep: no exe path; using fallback offsets\n"));
+            return;
+        }
+        exe_path[exe_len] = '\0';
+        const std::string exe_name = std::string(exe_path).substr(std::string(exe_path).find_last_of('/') + 1);
+
+        struct Region { uintptr_t base; size_t size; bool exec; };
+        std::vector<Region> regions;
+        if (FILE* maps = fopen("/proc/self/maps", "r"))
+        {
+            char line[512];
+            while (fgets(line, sizeof(line), maps))
+            {
+                if (!strstr(line, exe_name.c_str()))
+                {
+                    continue;
+                }
+                unsigned long long start = 0, end = 0;
+                char perms[8]{};
+                if (sscanf(line, "%llx-%llx %7s", &start, &end, perms) == 3 && end > start)
+                {
+                    regions.push_back({static_cast<uintptr_t>(start), static_cast<size_t>(end - start), strchr(perms, 'x') != nullptr});
+                }
+            }
+            fclose(maps);
+        }
+        if (regions.empty())
+        {
+            Output::send<LogLevel::Warning>(STR("Palworld vtable sweep: no exe mappings found; using fallback offsets\n"));
+            return;
+        }
+
+        // Component-adapter thunk pattern: 48 85 F6 74 ?? 48 83 C7 28 48 8D 56 30 E9
+        static const uint8_t kAdapterPat[] = {0x48, 0x85, 0xF6, 0x74, 0x00, 0x48, 0x83, 0xC7, 0x28, 0x48, 0x8D, 0x56, 0x30, 0xE9};
+        static const size_t kAdapterPatLen = sizeof(kAdapterPat);
+        static const size_t kWildcardIdx = 4; // je rel8 offset varies
+
+        std::vector<uintptr_t> adapter_addrs;
+        for (const auto& [rbase, rsize, rexec] : regions)
+        {
+            const auto* rimg = reinterpret_cast<const uint8_t*>(rbase);
+            for (size_t i = 0; i + kAdapterPatLen <= rsize; ++i)
+            {
+                if (rimg[i] != 0x48 || rimg[i + 1] != 0x85)
+                {
+                    continue;
+                }
+                bool match = true;
+                for (size_t j = 2; j < kAdapterPatLen; ++j)
+                {
+                    if (j != kWildcardIdx && rimg[i + j] != kAdapterPat[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match)
+                {
+                    adapter_addrs.push_back(rbase + i);
+                }
+            }
+        }
+        if (adapter_addrs.empty())
+        {
+            Output::send<LogLevel::Warning>(STR("Palworld vtable sweep: tick-prerequisite adapter not found; using fallback offsets\n"));
+            return;
+        }
+
+        // Qword-scan the image for vtable slots referencing an adapter.
+        //
+        // NOTE: vtables do NOT hold the raw ProcessEvent address (slot 0x268
+        // holds a shared wrapper instead), so offsets are derived from the
+        // vtable base itself: walk backwards from the adapter hit to the
+        // Itanium vtable header — a zero offset-to-top qword followed by a
+        // typeinfo pointer into the image.
+        auto in_exec = [&regions](uintptr_t v) {
+            for (const auto& [rb, rs, rx] : regions)
+            {
+                if (v >= rb && v < rb + rs) { return rx; }
+            }
+            return false;
+        };
+        auto find_vtable_base = [&](uintptr_t slot_addr) -> uintptr_t {
+            for (uintptr_t p = slot_addr - 0x10; p > slot_addr - 0x2000; p -= 8)
+            {
+                const uint64_t offset_to_top = *reinterpret_cast<const uint64_t*>(p);
+                const uint64_t typeinfo = *reinterpret_cast<const uint64_t*>(p + 8);
+                const uint64_t first_fn = *reinterpret_cast<const uint64_t*>(p + 0x10);
+                // Itanium primary vtable header: offset-to-top (0) then
+                // typeinfo. On this stripped binary typeinfo is NULL, so also
+                // reject the shifted-by-8 position: the 'typeinfo' slot must
+                // NOT be a code pointer, and the first slot MUST be one.
+                if (offset_to_top == 0 && (typeinfo == 0 || !in_exec(typeinfo)) && in_exec(first_fn))
+                {
+                    return p + 0x10; // first function slot
+                }
+            }
+            return 0;
+        };
+
+        std::unordered_map<uint32_t, uint32_t> offset_votes;    // BeginPlay slot offset -> count
+        std::unordered_map<uintptr_t, uint32_t> beginplay_votes; // candidate fn -> count
+        std::unordered_map<uintptr_t, uint32_t> endplay_votes;
+        uint32_t total_hits = 0;
+
+        for (const uintptr_t adapter : adapter_addrs)
+        {
+            for (const auto& [rbase, rsize, rexec] : regions)
+            {
+            const auto* rimg = reinterpret_cast<const uint8_t*>(rbase);
+            for (size_t off = 8; off + 0x18 <= rsize; off += 8)
+            {
+                if (*reinterpret_cast<const uint64_t*>(rimg + off) != adapter)
+                {
+                    continue;
+                }
+                const uintptr_t slot_addr = rbase + off;
+                const uintptr_t vbase = find_vtable_base(slot_addr);
+                if (!vbase)
+                {
+                    continue;
+                }
+                const uint64_t beginplay_off = slot_addr + 8 - vbase;
+                if (beginplay_off < 0x40 || beginplay_off > 0x800)
+                {
+                    continue;
+                }
+                ++total_hits;
+                offset_votes[static_cast<uint32_t>(beginplay_off)] += 1;
+                beginplay_votes[*reinterpret_cast<const uint64_t*>(rimg + off + 8)] += 1;
+                endplay_votes[*reinterpret_cast<const uint64_t*>(rimg + off + 0x10)] += 1;
+            }
+            }
+        }
+
+        auto mode_of = [](const std::unordered_map<uint32_t, uint32_t>& m) -> std::pair<uint32_t, uint32_t> {
+            uint32_t best_key = 0, best_n = 0;
+            for (const auto& [k, n] : m)
+            {
+                if (n > best_n) { best_key = k; best_n = n; }
+            }
+            return {best_key, best_n};
+        };
+        auto mode_of_ptr = [](const std::unordered_map<uintptr_t, uint32_t>& m) -> std::pair<uintptr_t, uint32_t> {
+            uintptr_t best_key = 0; uint32_t best_n = 0;
+            for (const auto& [k, n] : m)
+            {
+                if (n > best_n) { best_key = k; best_n = n; }
+            }
+            return {best_key, best_n};
+        };
+
+        const auto [best_off, off_n] = mode_of(offset_votes);
+        const auto [bp_fn, bp_n] = mode_of_ptr(beginplay_votes);
+        const auto [ep_fn, ep_n] = mode_of_ptr(endplay_votes);
+
+        const bool conclusive = total_hits >= 100 && off_n * 10 >= total_hits * 6 &&
+                                bp_n * 20 >= off_n * 9 && ep_n * 20 >= off_n * 9;
+        if (!conclusive)
+        {
+            Output::send<LogLevel::Warning>(STR("Palworld vtable sweep: inconclusive (hits={}, offset 0x{:X} {}/{}, BeginPlay {}/{}, EndPlay {}/{}); using fallback offsets\n"),
+                                            total_hits, best_off, off_n, total_hits, bp_n, off_n, ep_n, off_n);
+            return;
+        }
+
+        if (!validate_hook_target(STR("sweep BeginPlay candidate"), reinterpret_cast<void*>(bp_fn), HookShape::ManyArgs))
+        {
+            Output::send<LogLevel::Warning>(STR("Palworld vtable sweep: BeginPlay candidate {} failed prologue sanity; using fallback offsets\n"),
+                                            reinterpret_cast<void*>(bp_fn));
+            return;
+        }
+
+        const uint32_t new_beginplay = best_off;
+        const uint32_t new_endplay = best_off + 8;
+        const uint32_t old_beginplay = AActor::VTableLayoutMap[STR("BeginPlay")];
+        const uint32_t old_endplay = AActor::VTableLayoutMap[STR("EndPlay")];
+        AActor::VTableLayoutMap[STR("BeginPlay")] = new_beginplay;
+        AActor::VTableLayoutMap[STR("EndPlay")] = new_endplay;
+        Output::send(STR("Palworld vtable sweep: {} vtables, BeginPlay slot 0x{:X} ({}/{}); candidate {} ({}/{}), EndPlay {} ({}/{})\n"),
+                     total_hits, best_off, off_n, total_hits,
+                     reinterpret_cast<void*>(bp_fn), bp_n, off_n, reinterpret_cast<void*>(ep_fn), ep_n, off_n);
+        Output::send(STR("Palworld vtable sweep: BeginPlay 0x{:X} -> 0x{:X}, EndPlay 0x{:X} -> 0x{:X}\n"),
+                     old_beginplay, new_beginplay, old_endplay, new_endplay);
+    }
 #define UE4SS_VALIDATE_HOOK(hook_name, addr, hook_shape) validate_hook_target(hook_name, addr, hook_shape)
 #else
 #define UE4SS_VALIDATE_HOOK(hook_name, addr, hook_shape) (true)
@@ -931,6 +1144,13 @@ namespace RC::Unreal::UnrealInitializer
                 FProperty::VTableLayoutMap[STR("SameType")] = 0x168;
 
                 Output::send(STR("Palworld vtable override: +8 shift applied to all UObject-derived maps from 0x260, FProperty GetMinAlignment=0x150\n"));
+
+                // Self-healing sweep: re-derive the AActor-region offsets from
+                // the binary by consensus over all AActor-family vtables, so a
+                // Palworld update that shuffles the region keeps working.
+                // The hardcoded values above are the fallback if the sweep is
+                // inconclusive.
+                sweep_actor_vtable_offsets();
             }
         }
 #endif
