@@ -1,6 +1,30 @@
 # UE4SS Native Linux Port — Palworld Server
 
-## Status: WORKING — all major hooks verified in-game (2026-07-28)
+## Status: WORKING — all hooks verified in-game; update-resilient (2026-07-29)
+
+Lua mods load, `RegisterHook` works, admin commands work, players join and play
+with the full hook set enabled. Server stable at 118–119 FPS.
+
+## Update resilience (what happens when Palworld updates)
+
+Three layers, so an update either just works or fails loudly — never a silent
+mid-session crash:
+
+1. **AOB scans** (update-robust already): ProcessEvent, PLSF,
+   CallFunctionByNameWithArguments, FName ctor, StaticConstructObject,
+   GUObjectArray, GMalloc are all pattern-resolved and survive recompiles.
+2. **Self-healing vtable sweep** (commit `a90eb5e`): at boot, re-derives
+   AActor BeginPlay/EndPlay slot offsets by consensus over all ~505
+   AActor-family vtables (tick-prereq adapter anchor + Itanium header walk).
+   Slots moved by an update are corrected automatically; inconclusive sweeps
+   keep the hardcoded fallbacks below. Watch the boot log for
+   `Palworld vtable sweep:` lines — they print old -> new offsets.
+3. **Hook-target validation gate** (commit `bc51fea`): every vtable-resolved
+   hook target is disassembled before detouring. Refuses only proven crash
+   classes (junk target, float/int register truncation) — those log
+   `REFUSED`; shape drift logs a `NOTE` and installs anyway (trampoline
+   pass-through is safe for extra pointer args). After an update: check
+   UE4SS.log for `REFUSED`/`NOTE` lines before joining.
 
 Lua mods load, `RegisterHook` works, admin commands work, players join and play
 with the full hook set enabled. Server stable at 118–119 FPS.
@@ -102,11 +126,14 @@ was 0 — wrong for e.g. `BountyProof_1`). New Lua overload
   - SIGSEGV `[rsi+8]` inside libUE4SS after a vtable hook → detour signature
     mismatch; Lua callback marshaled a garbage `this`/param.
   - `rip` in `0x7f...` range = inside libUE4SS/trampolines; low `0x0...` = game binary.
-- **After any Palworld update:** re-verify every offset in the table above
-  against the new binary BEFORE enabling hooks (method: vtable anchor sweep +
-  caller arg-setup check). Boot and confirm the `... address 0x...` lines in
-  `UE4SS.log` match expectations; `PalworldNameProvider` errors or
-  `ScanGame: ... failed` lines mean re-derivation is needed.
+- **After any Palworld update:** boot once and read `UE4SS.log` BEFORE
+  joining. `vtable sweep` lines confirm BeginPlay/EndPlay self-corrected;
+  `validation REFUSED` lines mean a hook was left disabled (compare against
+  the hook table, re-derive that slot via the binary method, update the
+  fallback in `UnrealInitializer.cpp`); `validation NOTE` lines mean a hook
+  installed despite shape drift — play-test that hook's behavior.
+  UObject/InitGameState/LoadMap/Tick offsets are NOT swept: if their NOTE/
+  REFUSED lines appear, re-derive manually (method below).
 - **The port hooks PLSF/CFBNWA-relevant script dispatch via the standard
   TDetourInstance path; mods using `RegisterHook` on UFunctions rely on it.**
   If joins freeze at ~90% again, suspect these first — but do NOT blanket-disable;
