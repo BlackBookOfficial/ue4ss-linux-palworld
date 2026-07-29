@@ -1,6 +1,9 @@
 name: Linux Release Publisher
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       prerelease:
@@ -33,6 +36,9 @@ jobs:
 
       - name: Fetch all tags
         run: git fetch --tags --force origin
+
+      - name: Resolve tag name
+        run: echo "TAG_NAME=${{ inputs.tag_name != '' && inputs.tag_name || github.ref_name }}" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: |
@@ -221,6 +227,9 @@ jobs:
           Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           EOF
 
+      - name: Package tarball
+        run: tar -C release -czf "ue4ss-linux-palworld-${TAG_NAME}-Game__Dev__Linux64.tar.gz" libUE4SS.so BUILD_INFO.txt
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -232,11 +241,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag_name }}
-          prerelease: ${{ inputs.prerelease }}
+          tag_name: ${{ env.TAG_NAME }}
+          prerelease: ${{ inputs.prerelease != '' && inputs.prerelease || false }}
           target_commitish: linux-native
           body: |
-            ## UE4SS ${{ inputs.tag_name }} — Linux Native Build
+            ## UE4SS ${{ env.TAG_NAME }} — Linux Native Build
             
             ${{ steps.changelog.outputs.CHANGELOG }}
             
@@ -263,5 +272,6 @@ jobs:
             - Requires: libGL, libEGL, libX11, libXrandr, libXinerama, libXcursor, libXi
             - Engine Tick Hook: Auto-detected via dlsym (or manual override in UE4SS_Addresses.ini)
           files: |
+            ue4ss-linux-palworld-${{ env.TAG_NAME }}-Game__Dev__Linux64.tar.gz
             release/libUE4SS.so
             release/BUILD_INFO.txt
