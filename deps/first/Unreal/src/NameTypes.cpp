@@ -127,7 +127,7 @@ namespace RC::Unreal
                         if (base[j] == 0xE8) { has_call = true; break; }
                     }
                     if (!has_call) { continue; }
-                    g_engine_find_name = reinterpret_cast<EngineFindNameFn>(base + i);
+                    g_engine_find_name = reinterpret_cast<EngineFindNameFn>(const_cast<unsigned char*>(base + i));
                     break;
                 }
                 if (g_engine_find_name) { break; }
