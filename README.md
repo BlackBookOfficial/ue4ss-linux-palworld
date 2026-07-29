@@ -38,6 +38,50 @@ A native Linux build of UE4SS (Unreal Engine 4/5 Scripting System) for dedicated
 - **POSIX File System**: Full Linux file system support
 - **Native Linux Crash Dumper**: Signal-based crash handling with backtrace
 
+## Palworld (UE 5.1) Status
+
+Fully working on the native Linux dedicated server — all major hooks verified
+in-game: BeginPlay, EndPlay, LoadMap, InitGameState, ProcessConsoleExec,
+ULocalPlayerExec, EngineTick, ProcessLocalScriptFunction,
+CallFunctionByNameWithArguments, UObjectProcessEvent, StaticConstructObject.
+
+Game updates are handled by three resilience layers, so a Palworld update
+either just works or fails loudly — never a silent mid-session crash:
+
+1. **AOB scans** resolve ProcessEvent, FName, GUObjectArray, etc. across
+   recompiles.
+2. **Self-healing vtable sweep** re-derives AActor BeginPlay/EndPlay slot
+   offsets by consensus over all in-binary vtables at boot.
+3. **Hook-target validation gate** disassembles each hook target before
+   detouring and refuses proven-crash classes with a named log line.
+
+See [UE4SS-PALWORLD-LINUX-STATUS.md](UE4SS-PALWORLD-LINUX-STATUS.md) for the
+full hook table, verified offsets, and what to check in the log after an
+update (`REFUSED` / `NOTE` lines).
+
+## Building From Source
+
+Linux (GCC or Clang) — the same recipe CI uses:
+
+```bash
+sudo apt-get install -y cmake ninja-build pkg-config gcc g++ \
+  libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+  libgl-dev libegl-dev libgles-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust toolchain
+
+git clone --recursive https://github.com/BlackbookOfficial/ue4ss-linux-palworld.git
+cd ue4ss-linux-palworld
+cmake -B build_linux_Dev_gcc -G Ninja \
+  -DCMAKE_BUILD_TYPE=Game__Dev__Linux64 \
+  -DUE4SS_GUI_ENABLED=ON -DUE4SS_INPUT_ENABLED=OFF
+cmake --build build_linux_Dev_gcc --target UE4SS
+# result: build_linux_Dev_gcc/Game__Dev__Linux64/lib/libUE4SS.so
+```
+
+CI (`Linux & Cross-Compile CI` workflow) builds GCC+Clang, Debug+Dev on every
+push and PR to `linux-native`; the `Linux Release Publisher` workflow tags a
+release with ready-to-deploy artifacts. No local build required.
+
 ## Installation
 
 ### Prerequisites
@@ -49,7 +93,7 @@ A native Linux build of UE4SS (Unreal Engine 4/5 Scripting System) for dedicated
 
 1. **Download the latest release**
 
-   Download `UE4SS-Linux-build.zip` from the [Releases page](https://github.com/XarminaEu/ue4ss-linux/releases/latest).
+   Download `UE4SS-Linux-build.zip` from the [Releases page](https://github.com/BlackbookOfficial/ue4ss-linux-palworld/releases/latest).
 
 2. **Extract the archive**
 
@@ -136,7 +180,7 @@ DebugBuild=false
 
 ## Known Limitations
 
-- **Work in Progress**: The entire codebase is being ported from Windows to Linux. Since this is an ongoing process, bugs may still occur. Not all Windows-specific code paths have been fully tested — please [report issues](https://github.com/XarminaEu/ue4ss-linux/issues) if you encounter problems.
+- **Work in Progress**: The entire codebase is being ported from Windows to Linux. Since this is an ongoing process, bugs may still occur. Not all Windows-specific code paths have been fully tested — please [report issues](https://github.com/BlackbookOfficial/ue4ss-linux-palworld/issues) if you encounter problems.
 - **Function Resolution**: UE function addresses are resolved automatically on unstripped binaries via `dlsym`. On stripped binaries, use `UE4SS_Addresses.ini` to provide addresses manually. Without resolved addresses, mod functionality is limited to Lua scripting and basic operations.
 - **Engine Version**: The engine version defaults to UE 5.1 (Palworld). For other games, set `[EngineVersionOverride]` in `UE4SS-settings.ini` with the correct `MajorVersion` and `MinorVersion`.
 - **AOB/Signature Scanning**: patternsleuth (Rust) is built on Linux via Corrosion with ELF support. Pattern-based address discovery works for ELF binaries. On unstripped binaries, `dlsym` is used as the primary resolution method; patternsleuth provides fallback AOB scanning. On stripped binaries, manual entries in `UE4SS_Addresses.ini` may still be needed if AOB patterns don't match.
@@ -184,7 +228,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full changelog.
 
 ## Downloads
 
-Download the latest build from the [Releases page](https://github.com/XarminaEu/ue4ss-linux/releases/latest). Old releases are replaced with each new build.
+Download the latest build from the [Releases page](https://github.com/BlackbookOfficial/ue4ss-linux-palworld/releases/latest). Old releases are replaced with each new build.
 
 ## Support This Project
 
