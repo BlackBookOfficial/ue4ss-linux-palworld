@@ -69,7 +69,7 @@ sudo apt-get install -y cmake ninja-build pkg-config gcc g++ \
   libgl-dev libegl-dev libgles-dev
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust toolchain
 
-git clone --recursive https://github.com/BlackbookOfficial/ue4ss-linux-palworld.git
+git clone --recursive https://github.com/BlackBookOfficial/ue4ss-linux-palworld.git
 cd ue4ss-linux-palworld
 cmake -B build_linux_Dev_gcc -G Ninja \
   -DCMAKE_BUILD_TYPE=Game__Dev__Linux64 \
@@ -93,7 +93,7 @@ release with ready-to-deploy artifacts. No local build required.
 
 1. **Download the latest release**
 
-   Download `UE4SS-Linux-build.zip` from the [Releases page](https://github.com/BlackbookOfficial/ue4ss-linux-palworld/releases/latest).
+   Download `UE4SS-Linux-build.zip` from the [Releases page](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/releases/latest).
 
 2. **Extract the archive**
 
@@ -180,7 +180,7 @@ DebugBuild=false
 
 ## Known Limitations
 
-- **Work in Progress**: The entire codebase is being ported from Windows to Linux. Since this is an ongoing process, bugs may still occur. Not all Windows-specific code paths have been fully tested — please [report issues](https://github.com/BlackbookOfficial/ue4ss-linux-palworld/issues) if you encounter problems.
+- **Work in Progress**: The entire codebase is being ported from Windows to Linux. Since this is an ongoing process, bugs may still occur. Not all Windows-specific code paths have been fully tested — please [report issues](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/issues) if you encounter problems.
 - **Function Resolution**: UE function addresses are resolved automatically on unstripped binaries via `dlsym`. On stripped binaries, use `UE4SS_Addresses.ini` to provide addresses manually. Without resolved addresses, mod functionality is limited to Lua scripting and basic operations.
 - **Engine Version**: The engine version defaults to UE 5.1 (Palworld). For other games, set `[EngineVersionOverride]` in `UE4SS-settings.ini` with the correct `MajorVersion` and `MinorVersion`.
 - **AOB/Signature Scanning**: patternsleuth (Rust) is built on Linux via Corrosion with ELF support. Pattern-based address discovery works for ELF binaries. On unstripped binaries, `dlsym` is used as the primary resolution method; patternsleuth provides fallback AOB scanning. On stripped binaries, manual entries in `UE4SS_Addresses.ini` may still be needed if AOB patterns don't match.
@@ -228,7 +228,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full changelog.
 
 ## Downloads
 
-Download the latest build from the [Releases page](https://github.com/BlackbookOfficial/ue4ss-linux-palworld/releases/latest). Old releases are replaced with each new build.
+Download the latest build from the [Releases page](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/releases/latest). Old releases are replaced with each new build.
 
 ## Support This Project
 
