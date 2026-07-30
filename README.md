@@ -139,12 +139,9 @@ cmake --build build_linux_Dev_gcc --target UE4SS
 # -> build_linux_Dev_gcc/Game__Dev__Linux64/lib/libUE4SS.so
 ```
 
-### CI
-- **Linux & Cross-Compile CI** — every push/PR to `linux-native`:
-  Debug + Dev × gcc + clang. (`Debug`/`Dev` are UE4SS build configurations,
-  not "debug vs release" in the classic sense; the shippable config is `Dev`.)
-- **Linux Release Publisher** — manual trigger with a tag: builds the `Dev`
-  config and publishes a GitHub Release with ready-to-deploy artifacts.
+Every push/PR to `linux-native` builds gcc Debug+Dev automatically
+([Actions](../../actions)); pushing a `v*` tag publishes a GitHub Release
+with the shippable `Dev` build as a ready-to-deploy tarball.
 
 ### After a Palworld update
 1. Boot once, read `UE4SS.log`: `vtable sweep` lines confirm self-correction,
