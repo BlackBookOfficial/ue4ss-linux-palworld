@@ -243,7 +243,7 @@ Please reach out in the UE4SS Discord to brainstorm/share any ideas you might ha
 
 * [DataTable Pull Request](https://github.com/Re-UE4SS/UEPseudo/pull/74/commits/04ef456ea337c59bc2df8ba9162ce4a7e52de445) - I think you need Epic Games group access to view this?
 * [UE5 Wiki](https://ue5wiki.com/wiki/34184/) (CN)
-* [UE4SS Docs](https://github.com/XarminaEu/ue4ss-linux/tree/main/docs)
+* [UE4SS Docs](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/tree/main/docs)
 * [JIP Blog](https://jip.dev/notes/unreal-engine/)
 
 ## Credits

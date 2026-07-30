@@ -1,7 +1,7 @@
 # Custom Game Configs
 
 > [!IMPORTANT]
-> Some of these files may be out of date as the games/UE4SS updates. If you find that a game's custom game config is out of date, please open an issue on the [ue4ss-linux repository](https://github.com/XarminaEu/ue4ss-linux/issues). Make sure that you first test if the game works without the custom game config, as it may have been fixed in the latest version of UE4SS.
+> Some of these files may be out of date as the games/UE4SS updates. If you find that a game's custom game config is out of date, please open an issue on the [ue4ss-linux-palworld repository](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/issues). Make sure that you first test if the game works without the custom game config, as it may have been fixed in the latest version of UE4SS.
 
 These settings are for games that have altered the engine in ways that make UE4SS not work out of the box.  
 

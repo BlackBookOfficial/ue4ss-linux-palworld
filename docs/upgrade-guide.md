@@ -551,5 +551,5 @@ end)
 
 If you encounter problems while upgrading, please:
 
-1. Check the [open issues](https://github.com/XarminaEu/ue4ss-linux/issues) for similar reports
+1. Check the [open issues](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/issues) for similar reports
 2. Create a new upgrade problem issue if your issue hasn't been reported

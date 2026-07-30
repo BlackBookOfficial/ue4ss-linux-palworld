@@ -1,8 +1,9 @@
 // ===========================================================================
 // UE4SS Linux Native Port
-// Copyright (c) 2026 rl-dev.de (https://rl-dev.de)
+// Copyright (c) 2026 BlackBookOfficial
 // Based on RE-UE4SS by UE4SS-RE (https://github.com/UE4SS-RE/RE-UE4SS)
-// Linux port originally by calebm02 (https://github.com/calebm02/RE-UE4SS-Linux)
+// Palworld fork by Yangff
+// Linux native port by BlackBookOfficial
 //
 // Licensed under the MIT License. See LICENSE and NOTICE for details.
 // ===========================================================================
@@ -48,22 +49,21 @@ static constexpr const char* COPYRIGHT_BANNER =
     "\n"
     "========================================\n"
     " UE4SS Linux Native Port\n"
-    " Copyright (c) 2026 Robin Oliver Lucas\n"
-    " https://rl-dev.de\n"
+    " Copyright (c) 2026 BlackBookOfficial\n"
+    " https://github.com/BlackBookOfficial/ue4ss-linux-palworld\n"
     "\n"
     " Based on RE-UE4SS by UE4SS-RE\n"
     " https://github.com/UE4SS-RE/RE-UE4SS\n"
     "\n"
-    " Linux port by calebm02\n"
-    " https://github.com/calebm02/RE-UE4SS-Linux\n"
+    " Palworld fork by Yangff\n"
+    " Linux native port by BlackBookOfficial\n"
     "========================================\n";
 
 // Embedded copyright signature for anti-tamper verification.
 // If someone strips the copyright headers or NOTICE file, this check
-// will still detect tampering by verifying the embedded hash.
-static constexpr const char* COPYRIGHT_SIG = "rl-dev.de/UE4SS-RE/calebm02";
-static constexpr uint32_t COPYRIGHT_HASH = 0x726C6476; // 'rldv' — simple marker
+static constexpr const char* COPYRIGHT_SIG = "BlackBookOfficial/UE4SS-RE/Yangff";
 
+static constexpr uint32_t COPYRIGHT_HASH = 0x62626F6B; // 'bbok' — simple marker
 static auto verify_copyright() -> bool
 {
     // Check that the copyright signature is still present in this binary
@@ -75,7 +75,7 @@ static auto verify_copyright() -> bool
         // The COPYRIGHT_SIG string is compiled into the binary as a string literal.
         // If someone patches it out, the binary is tampered with.
         // We just verify the pointer is valid (the string exists in .rodata).
-        if (COPYRIGHT_SIG == nullptr || COPYRIGHT_SIG[0] != 'r')
+        if (COPYRIGHT_SIG == nullptr || COPYRIGHT_SIG[0] != 'B')
         {
             return false;
         }
@@ -313,8 +313,8 @@ static auto thread_dll_start() -> void
         if (!verify_copyright())
         {
             UE4SS_ERR("[UE4SS] WARNING: Copyright verification failed. This binary may have been tampered with.\n");
-            UE4SS_ERR("[UE4SS] Original source: https://github.com/XarminaEu/ue4ss-linux\n");
-            UE4SS_ERR("[UE4SS] Copyright (c) 2026 Robin Oliver Lucas — https://rl-dev.de\n");
+            UE4SS_ERR("[UE4SS] Original source: https://github.com/BlackBookOfficial/ue4ss-linux-palworld\n");
+            UE4SS_ERR("[UE4SS] Copyright (c) 2026 BlackBookOfficial\n");
         }
 
         wait_for_game_ready();

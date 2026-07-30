@@ -89,7 +89,7 @@ find your mod's output among other log strings in the console.
 
 The player coordinates are retrieved in the following way:
 
-1) Gets the [player controller](https://docs.unrealengine.com/4.27/en-US/API/Runtime/Engine/GameFramework/APlayerController/) using [UE4SS `UEHelpers` class](https://github.com/XarminaEu/ue4ss-linux/blob/main/assets/Mods/shared/UEHelpers/UEHelpers.lua).
+1) Gets the [player controller](https://docs.unrealengine.com/4.27/en-US/API/Runtime/Engine/GameFramework/APlayerController/) using [UE4SS `UEHelpers` class](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/blob/main/assets/Mods/shared/UEHelpers/UEHelpers.lua).
 2) Get [the `Pawn`](https://docs.unrealengine.com/4.27/en-US/API/Runtime/Engine/GameFramework/APawn/), which represents the actual "physical" entity that the player can control in Unreal Engine.
 3) Call the appropriate Unreal Engine [method `K2_GetActorLocation`](https://docs.unrealengine.com/4.27/en-US/API/Runtime/Engine/GameFramework/AActor/K2_GetActorLocation/) that returns a `Pawn`'s location (by accessing its parent `Actor` class).
 4) The location is a 3-component vector of Unreal Engine type `FVector`, having `X`, `Y` and `Z` as its fields.

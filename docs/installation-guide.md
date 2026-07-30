@@ -23,7 +23,7 @@ There are four concepts you need to know about.
 
 ### Step 1: Download the latest release
 
-Download `UE4SS-Linux-build.zip` from the [Releases page](https://github.com/XarminaEu/-ue4ss-linux-builds/releases/latest).
+Download `UE4SS-Linux-build.zip` from the [Releases page](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/releases/latest).
 
 ### Step 2: Extract the archive
 

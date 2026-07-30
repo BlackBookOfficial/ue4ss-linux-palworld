@@ -4,4 +4,4 @@ Template repository for making UE4SS C++ mods: [UE4SSCPPTemplate](https://github
 
 Search GitHub for any C++ code calling reasonably uniquely-named UE4SS API functions, excluding the actual UE4SS repository from the search:
 
-https://github.com/search?q=language%3Acpp++%22+%3A+public+CppUserModBase%22+NOT+repo%3AXarminaEu%2Fue4ss-linux+NOT+repo%3AUE4SS-RE%2FRE-UE4SS+NOT+repo%3AEpicGames%2FUnrealEngine&type=code
+https://github.com/search?q=language%3Acpp++%22+%3A+public+CppUserModBase%22+NOT+repo%3ABlackBookOfficial%2Fue4ss-linux-palworld+NOT+repo%3AUE4SS-RE%2FRE-UE4SS+NOT+repo%3AEpicGames%2FUnrealEngine&type=code

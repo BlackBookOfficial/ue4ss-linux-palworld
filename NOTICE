@@ -1,11 +1,12 @@
 UE4SS Linux Native Port
-Copyright (c) 2026 Robin Oliver Lucas (https://rl-dev.de)
+Copyright (c) 2026 BlackBookOfficial
+(https://github.com/BlackBookOfficial/ue4ss-linux-palworld)
 
 This product is based on RE-UE4SS by UE4SS-RE.
 Original source: https://github.com/UE4SS-RE/RE-UE4SS
 
-Linux port originally by calebm02:
-https://github.com/calebm02/RE-UE4SS-Linux
+Palworld fork by Yangff.
+Linux native port by BlackBookOfficial.
 
 This software includes components from:
   - Epic Games, Inc. (Unreal Engine headers, under Epic Games license)
@@ -19,7 +20,8 @@ modification, are permitted provided that the following conditions are met:
 
 1. The above copyright notice and this permission notice shall be included
    in all copies or substantial portions of the Software.
-2. Attribution to rl-dev.de (https://rl-dev.de) and UE4SS-RE
+2. Attribution to BlackBookOfficial
+   (https://github.com/BlackBookOfficial/ue4ss-linux-palworld) and UE4SS-RE
    (https://github.com/UE4SS-RE) must be retained in all derivative works.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.

@@ -228,9 +228,9 @@ WantedBy=multi-user.target
 ### Build Steps
 
 ```bash
-git clone --recursive https://github.com/XarminaEu/ue4ss-linux.git
-cd ue4ss-linux
-git checkout linux-native
+git clone --recursive https://github.com/BlackBookOfficial/ue4ss-linux-palworld.git
+cd ue4ss-linux-palworld
+git checkout main
 git submodule update --init --recursive
 
 # Configure

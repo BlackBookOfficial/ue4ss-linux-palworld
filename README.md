@@ -5,8 +5,9 @@ Engine 4/5 Scripting System) that runs Lua mods on a **Linux dedicated
 Palworld server** — no Windows, no Proton, no Wine. Loaded with `LD_PRELOAD`.
 
 > Based on [RE-UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) by UE4SS-RE
-> (MIT License), with Linux groundwork by
-> [calebm02](https://github.com/calebm02/RE-UE4SS-Linux).
+> (MIT License), with Palworld fork by
+> [Yangff](https://github.com/Yangff) and Linux native port by
+> [BlackBookOfficial](https://github.com/BlackBookOfficial/ue4ss-linux-palworld).
 
 ## Status
 

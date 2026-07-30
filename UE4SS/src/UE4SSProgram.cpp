@@ -1,8 +1,9 @@
 // ===========================================================================
 // UE4SS Linux Native Port
-// Copyright (c) 2024-2026 rl-dev.de (https://rl-dev.de)
+// Copyright (c) 2026 BlackBookOfficial
 // Based on RE-UE4SS by UE4SS-RE (https://github.com/UE4SS-RE/RE-UE4SS)
-// Linux port originally by calebm02 (https://github.com/calebm02/RE-UE4SS-Linux)
+// Palworld fork by Yangff
+// Linux native port by BlackBookOfficial
 //
 // Licensed under the MIT License. See LICENSE and NOTICE for details.
 // ===========================================================================
@@ -487,11 +488,11 @@ namespace RC
                          ensure_str(UE4SS_LIB_BUILD_GITSHA));
 
             // Copyright banner in the UE4SS console
-            Output::send<LogLevel::Normal>(STR("========================================\n"));
-            Output::send<LogLevel::Normal>(STR(" Copyright (c) 2024-2026 rl-dev.de\n"));
-            Output::send<LogLevel::Normal>(STR(" https://rl-dev.de\n"));
+            Output::send<LogLevel::Normal>(STR(" Copyright (c) 2026 BlackBookOfficial\n"));
+            Output::send<LogLevel::Normal>(STR(" https://github.com/BlackBookOfficial/ue4ss-linux-palworld\n"));
+            Output::send<LogLevel::Normal>(STR(" Palworld fork by Yangff\n"));
+            Output::send<LogLevel::Normal>(STR(" Linux native port by BlackBookOfficial\n"));
             Output::send<LogLevel::Normal>(STR(" Based on RE-UE4SS by UE4SS-RE\n"));
-            Output::send<LogLevel::Normal>(STR(" https://github.com/UE4SS-RE/RE-UE4SS\n"));
             Output::send<LogLevel::Normal>(STR("========================================\n"));
 
             bool use_local_time = true;

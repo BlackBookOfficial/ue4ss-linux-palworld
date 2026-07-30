@@ -6,8 +6,8 @@
 #
 # It packages the already-built .so together with README.md and CHANGELOG.md,
 # then publishes it as a release to BOTH:
-#   - the source repo (XarminaEu/ue4ss-linux)
-#   - the public builds repo (XarminaEu/-ue4ss-linux-builds)
+#   - the source repo (BlackBookOfficial/ue4ss-linux-palworld)
+#   - the public builds repo (BlackBookOfficial/ue4ss-linux-palworld-builds)
 #
 # Requirements:
 #   - gh CLI installed and authenticated: `gh auth login`
@@ -21,8 +21,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-SOURCE_REPO="XarminaEu/ue4ss-linux"
-BUILDS_REPO="XarminaEu/-ue4ss-linux-builds"
+SOURCE_REPO="BlackBookOfficial/ue4ss-linux-palworld"
+BUILDS_REPO="BlackBookOfficial/ue4ss-linux-palworld-builds"
 SO_PATH="build_linux/Game__Shipping__Linux64/lib/libUE4SS.so"
 BUILDS_REPO_DIR="$REPO_ROOT/.builds-repo-checkout"
 

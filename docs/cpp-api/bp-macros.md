@@ -141,7 +141,7 @@ For example, pass, without quotes, `WITH_OUTER(TMap, FName, int)` instead of `TM
 
 ## Internal macros
 
-These are only used by other macros, or by users of our C++ API if they properly understand the internals of the macros, and this requires preexisting knowledge around how UFunctions work, and you'll likely have to read [BPMacros.hpp](https://github.com/XarminaEu/ue4ss-linux/blob/main/deps/first/Unreal/include/Unreal/BPMacros.hpp) to understand how to use them properly.
+These are only used by other macros, or by users of our C++ API if they properly understand the internals of the macros, and this requires preexisting knowledge around how UFunctions work, and you'll likely have to read [BPMacros.hpp](https://github.com/BlackBookOfficial/ue4ss-linux-palworld/blob/main/deps/first/Unreal/include/Unreal/BPMacros.hpp) to understand how to use them properly.
 
 ### `UE_BEGIN_FUNCTION_BODY_INTERNAL`: 
 Throws if the UFunction doesn't exist, and allocates enough space (on the stack when possible, otherwise the heap) for the params and return value(s).
