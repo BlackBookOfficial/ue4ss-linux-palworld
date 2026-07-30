@@ -227,8 +227,34 @@ jobs:
           Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           EOF
 
+      - name: Assemble drop-in package tree
+        run: |
+          # Match upstream RE-UE4SS out-of-box experience: lib + settings +
+          # default mods + config, ready to drop beside PalServer.sh.
+          mkdir -p release/package
+          cp release/libUE4SS.so release/package/
+          cp assets/UE4SS-settings.ini release/package/
+          cp assets/palworld/MemberVariableLayout.ini release/package/
+          cp -r assets/Mods release/package/
+          cp release/BUILD_INFO.txt release/package/
+
+          cat > release/package/INSTALL.txt <<'EOF'
+          UE4SS Linux - Palworld dedicated server
+          =======================================
+          1. Stop your server.
+          2. Copy the ENTIRE contents of this folder next to PalServer.sh
+             (keeps: libUE4SS.so, UE4SS-settings.ini, MemberVariableLayout.ini,
+              Mods/, BUILD_INFO.txt).
+          3. Start your server with LD_PRELOAD pointing at libUE4SS.so, e.g.:
+               LD_PRELOAD=./libUE4SS.so ./PalServer.sh -port=8211 [your flags]
+          4. Lua mods: drop into Mods/<ModName>/ (with scripts/main.lua) and
+             add "ModName : 1" to Mods/mods.txt.
+          After a Palworld update, just restart — UE4SS re-resolves everything.
+          Details: https://github.com/BlackBookOfficial/ue4ss-linux-palworld
+          EOF
+
       - name: Package tarball
-        run: tar -C release -czf "ue4ss-linux-palworld-${TAG_NAME}-Game__Dev__Linux64.tar.gz" libUE4SS.so BUILD_INFO.txt
+        run: tar -C release/package -czf "ue4ss-linux-palworld-${TAG_NAME}.tar.gz" .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -259,7 +285,8 @@ jobs:
             - Compiler: GCC (Ubuntu 24.04)
             
             ### Artifacts
-            - `libUE4SS.so` — Stripped shared library
+            - `ue4ss-linux-palworld-<tag>.tar.gz` — Full drop-in: library, settings, Mods folder, config
+            - `libUE4SS.so` — Stripped shared library only (advanced users)
             - `BUILD_INFO.txt` — Build metadata
             
             ### Usage
@@ -272,6 +299,6 @@ jobs:
             - Requires: libGL, libEGL, libX11, libXrandr, libXinerama, libXcursor, libXi
             - Engine Tick Hook: Auto-detected via dlsym (or manual override in UE4SS_Addresses.ini)
           files: |
-            ue4ss-linux-palworld-${{ env.TAG_NAME }}-Game__Dev__Linux64.tar.gz
+            ue4ss-linux-palworld-${{ env.TAG_NAME }}.tar.gz
             release/libUE4SS.so
             release/BUILD_INFO.txt
