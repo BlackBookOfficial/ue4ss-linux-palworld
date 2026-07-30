@@ -84,7 +84,7 @@ jobs:
           
           # Export for Python
           export PREV_TAG
-          export RELEASE_TAG="${{ inputs.tag_name }}"
+          export RELEASE_TAG="${{ env.TAG_NAME }}"
           export REPO="${{ github.repository }}"
           
           python3 << 'PYEOF'
@@ -95,8 +95,8 @@ jobs:
           repo = os.environ.get("REPO", "")
 
           # Get commits with subject and body
+          fmt = "%x00%s%n%b"
           if prev_tag:
-              fmt = "%x00%s%n%b"
               result = subprocess.run(
                   ["git", "log", f"--pretty=format:{fmt}", f"{prev_tag}..HEAD", "--no-merges"],
                   capture_output=True, text=True
