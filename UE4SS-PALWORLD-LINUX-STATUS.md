@@ -70,6 +70,49 @@ ProcessEvent-and-later slots are +8. Do not generalize.
 
 ## Root Causes Found and Fixed (newest first)
 
+### Lua error handling on a multi-runtime process
+
+PalServer exports its own statically-linked C++ runtime (`__cxa_throw` etc.),
+and libsteam_api.so exports aborting crash-handler variants; both resolve
+before LD_PRELOAD entries in symbol scope order. Proven consequences:
+
+- Lua-internal errors (luaD_throw) threw through libsteam_api's `__cxa_throw`
+  → `abort()`. **Fix:** `LUA_USE_LONGJMP` keeps Lua error propagation inside
+  Lua's own setjmp/longjmp design (as upstream does on Windows).
+- C++ exceptions thrown from libUE4SS code (e.g.
+  `LuaMadeSimple::Lua::call_function` on an unprotected mod error) could not
+  be caught reliably either: the raise/personality/unwinder mixed runtimes
+  (`_Unwind_SetGR.cold` abort, `get_adjusted_ptr` SEGV), and with all EH + std
+  typeinfo symbols privatized via `-static-libstdc++` + a version script, the
+  runtime_error vtable still interposed (virtual `what()` jumped to garbage).
+  **Fix:** no C++ exceptions as error transport across the
+  LuaMadeSimple→LuaMod seam — use `call_function_report` (returns the error
+  as a value). `LuaMod::process_delayed_actions` uses it; unprotected mod
+  errors now log `[DelayedAction] ...` with a Lua traceback and the server
+  survives.
+
+**Hard rules that follow (do not regress these):**
+1. Lua-internal error propagation stays on longjmp — do not define away
+   `LUA_USE_LONGJMP`.
+2. No `throw` out of any Lua callback path executed inside hook executors —
+   report errors as values.
+3. `-Bsymbolic-functions` is NOT usable here (breaks `__dynamic_cast`'s
+   cross-library typeinfo semantics); symbol interposition for std-type
+   vtables between exe and preload cannot be fully controlled.
+
+### Lua thread safety — process-wide recursive lock
+
+Mod Lua states are `lua_newthread` coroutines sharing ONE global_State per
+mod, touched by: the game thread (detour/script hooks), each mod's
+`update_async` thread, and the main thread (start/stop/reload). The port had
+partial `m_thread_actions_mutex` coverage; `execute_hook`,
+`process_delayed_actions`, and most `on_program_start` callback lambdas were
+unguarded. **Fix:** all Lua entry channels now hold that recursive mutex.
+Zero FPS impact measured under a dual-thread Lua churn soak (LuaStress mod).
+Deadlock rule respected: never block while holding it (nobody does — there
+are no waits/futures in LuaMod), and `uninstall()` still stops the async
+thread BEFORE taking it.
+
 ### Thunk-aware JMP resolution (ASMHelper) — fixed PLSF join freeze
 **File:** `deps/first/ASMHelper/src/ASMHelper.cpp`
 `RESOLVE_JMP` previously stopped at the first instruction; a 2-instruction stub

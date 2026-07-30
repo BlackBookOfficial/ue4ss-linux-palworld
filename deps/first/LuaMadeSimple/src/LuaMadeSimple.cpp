@@ -994,6 +994,38 @@ namespace RC::LuaMadeSimple
         call_function(num_params, num_return_values);
     }
 
+    auto Lua::call_function_report(int32_t num_params, int32_t num_return_values, std::string& error_out) const noexcept -> bool
+    {
+        // Identical stack choreography to call_function(), but reports the
+        // error as a value instead of throwing a C++ exception. Rationale:
+        // on Linux, libUE4SS lives inside a process whose executable carries
+        // a different vendored C++ runtime; transporting a std:: exception
+        // object through the exception machinery proved unreliable (vtable
+        // interposition across binaries crashes virtual dispatch on the
+        // transported object). See UE4SS-PALWORLD-LINUX-STATUS.md.
+        lua_State* L = get_lua_state();
+
+        int top_before = lua_gettop(L);
+        int func_abs_idx = top_before - num_params;
+
+        lua_pushcfunction(L, pcall_error_handler);
+        lua_insert(L, func_abs_idx);
+        int err_handler_abs = func_abs_idx;
+
+        if (int status = lua_pcall(L, num_params, num_return_values, err_handler_abs); status != LUA_OK)
+        {
+            const char* msg = lua_tostring(L, -1);
+            error_out = fmt::format("[Lua::call_function] lua_pcall returned {} => {}",
+                                    status_to_string(status), msg ? msg : "(no error message)");
+            lua_pop(L, 1);
+            lua_remove(L, err_handler_abs);
+            return false;
+        }
+
+        lua_remove(L, err_handler_abs);
+        return true;
+    }
+
     auto Lua::prepare_new_table(int32_t preallocate_sequential_elements, int32_t preallocate_other_elements) const -> Table
     {
         lua_createtable(get_lua_state(), preallocate_sequential_elements, preallocate_other_elements);

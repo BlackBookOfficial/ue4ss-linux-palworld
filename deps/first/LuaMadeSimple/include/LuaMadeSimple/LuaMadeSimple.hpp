@@ -571,6 +571,16 @@ namespace RC::LuaMadeSimple
         RC_LMS_API auto call_function(int32_t num_params, int32_t num_return_values) const -> void;
         // Convenience function for calling less complicated Lua functions
         RC_LMS_API auto call_function(std::string_view global_function_name, int32_t num_params, int32_t num_return_values) const -> void;
+        // Linux: value-returning variant that NEVER throws. In a process
+        // where the executable vendors its own C++ runtime, transporting a
+        // std:: exception object through the EH machinery is unreliable
+        // (typeinfo/vtable interposition between exe and LD_PRELOAD binary —
+        // virtual dispatch on the transported object crashes: proven with
+        // PalServer, see UE4SS-PALWORLD-LINUX-STATUS.md). Use this for any
+        // error path that crosses into UE4SS's callback executors.
+        // Returns true on success; on a Lua error, returns false and fills
+        // error_out with the message. Does not throw.
+        RC_LMS_API auto call_function_report(int32_t num_params, int32_t num_return_values, std::string& error_out) const noexcept -> bool;
 
         RC_LMS_API auto prepare_new_table(int32_t preallocate_sequential_elements = 0, int32_t preallocate_other_elements = 0) const -> Table;
         RC_LMS_API auto prepare_new_metatable(const char* metatable_name) const -> Table;

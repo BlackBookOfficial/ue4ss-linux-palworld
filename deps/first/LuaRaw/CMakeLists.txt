@@ -76,10 +76,15 @@ target_compile_definitions(${TARGET}
         $<$<NOT:$<BOOL:${UE4SS_${TARGET}_BUILD_SHARED}>>:
             RC_${MODULE_NAME}_BUILD_STATIC>
         $<$<BOOL:${LUA_COMPILE_AS_CPP}>:LUA_COMPILED_AS_CPP>
-        # On Linux, libsteam_api.so exports __cxa_throw and __gxx_personality_v0,
-        # which intercept C++ exceptions thrown by Lua's error handling (luaD_throw)
-        # and call abort() instead of letting pcall catch the error.
-        # Using longjmp/setjmp bypasses the C++ exception mechanism entirely.
+        # On Linux, Lua-internal errors must NOT use C++ exceptions:
+        # the game executable itself exports __cxa_throw (beats LD_PRELOAD in
+        # symbol order) and the process already carries libstdc++/libgcc_s —
+        # any throw from Lua frames rides a foreign/mixed unwinder and
+        # aborts. longjmp/setjmp keeps Lua error propagation entirely inside
+        # Lua's own design (as on upstream/Windows). The residual dtor-skip
+        # surface is bounded to UE4SS lua_CFunction binding frames: bindings
+        # must catch their own C++ exceptions (UE4SS TRY blocks do) before
+        # returning into Lua. See UE4SS-PALWORLD-LINUX-STATUS.md.
         $<$<AND:$<BOOL:${LUA_COMPILE_AS_CPP}>,$<PLATFORM_ID:Linux>>:LUA_USE_LONGJMP>
 )
             
