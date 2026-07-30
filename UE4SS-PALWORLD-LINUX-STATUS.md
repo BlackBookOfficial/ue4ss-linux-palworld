@@ -140,6 +140,11 @@ was 0 — wrong for e.g. `BountyProof_1`). New Lua overload
   capture the stalled game thread with `gdb -p <pid> -batch -ex "thread apply all bt 8"`.
 - **Stripped binary:** no symbols; every address in this doc is for the current
   `PalServer-Linux-Shipping` build and WILL move on update.
+- **Never exercised in production:** headless GUI (`GuiEnabled=false` locally;
+  EGL hidden-window path exists in the build but has never run on this
+  server), C++ `.so` mod loading via `dlopen` (implemented in CppMod.cpp,
+  but no C++ mod has been load-tested), `ProcessInternal` hook
+  (unresolvable on stripped binaries — PLSF covers the mods that use it).
 
 ## Key Addresses (runtime, process-specific)
 - GUObjectArray: `0xc11e878` (BSS, patternsleuth)
