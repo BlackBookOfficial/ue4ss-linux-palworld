@@ -1,14 +1,15 @@
-project(KismetDebuggerMod)
+cmake_minimum_required(VERSION 3.22)
+project(KismetDebuggerMod LANGUAGES CXX)
 
-set(TARGET KismetDebuggerMod)
-project(${TARGET})
+# ue4ss_add_mod() handles cross-platform symbol export, -fvisibility=hidden,
+# the linker version script, and -static-libstdc++. See Ue4ssAddMod.cmake
+# for the full design rationale.
+include(Ue4ssAddMod)
 
-set(${TARGET}_Sources
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/dllmain.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/KismetDebugger.cpp"
-        )
+ue4ss_add_mod(KismetDebuggerMod
+        src/dllmain.cpp
+        src/KismetDebugger.cpp
+)
 
-add_library(${TARGET} SHARED ${${TARGET}_Sources})
-target_include_directories(${TARGET} PRIVATE "include")
-target_link_libraries(${TARGET} PRIVATE ImGui)
-target_link_libraries(${TARGET} PUBLIC UE4SS)
+target_link_libraries(KismetDebuggerMod PRIVATE ImGui Unreal String Input)
+target_link_libraries(KismetDebuggerMod PRIVATE ImGui Unreal String)

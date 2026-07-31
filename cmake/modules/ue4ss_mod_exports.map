@@ -1,0 +1,25 @@
+/*
+ * UE4SS C++ Mod ABI — linker version script
+ *
+ * Companion to the UE4SS_MOD_API macro in <UE4SS/mod_api.h>. The macro
+ * is the primary mechanism for exporting mod symbols; this script is a
+ * defense-in-depth fallback that catches mods which build without the
+ * macro (e.g. third-party mods that predate the macro, or mods that
+ * forget to include the header).
+ *
+ * The script tells the linker: export start_mod and uninstall_mod
+ * globally; keep everything else local (hidden). The result is the same
+ * dynamic symbol table as if the mod had used UE4SS_MOD_API correctly.
+ *
+ * Applied via:
+ *   target_link_options(<mod> PRIVATE "-Wl,--version-script=ue4ss_mod_exports.map")
+ * (set automatically by ue4ss_add_mod() on non-Windows targets)
+ */
+{
+    global:
+        start_mod;
+        uninstall_mod;
+
+    local:
+        *;
+};

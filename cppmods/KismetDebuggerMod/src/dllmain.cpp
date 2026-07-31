@@ -27,15 +27,22 @@ public:
     ~KismetDebuggerMod() override = default;
 };
 
-#define KISMET_DEBUGGER_MOD_API __declspec(dllexport)
+// The UE4SS_MOD_API macro (from <UE4SS/mod_api.h>) handles the
+// platform-specific symbol export. On Windows it expands to
+// __declspec(dllexport); on Linux to __attribute__((visibility("default"))).
+// The extern "C" block prevents C++ name mangling so the loader can
+// find the symbols by their plain names. The linker version script
+// applied by ue4ss_add_mod() is a defense-in-depth fallback.
+#include <UE4SS/mod_api.h>
+
 extern "C"
 {
-    KISMET_DEBUGGER_MOD_API RC::CppUserModBase* start_mod()
+    UE4SS_MOD_API RC::CppUserModBase* start_mod()
     {
         return new KismetDebuggerMod();
     }
 
-    KISMET_DEBUGGER_MOD_API void uninstall_mod(RC::CppUserModBase* mod)
+    UE4SS_MOD_API void uninstall_mod(RC::CppUserModBase* mod)
     {
         delete mod;
     }

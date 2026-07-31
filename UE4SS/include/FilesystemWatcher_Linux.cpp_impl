@@ -98,53 +98,62 @@ namespace RC
                         {
                             break;
                         }
-                        const inotify_event* event{};
-                        for (auto ptr = buffer; ptr < buffer + length; ptr += sizeof(inotify_event) + event->len)
+                        // Iterate inotify events. Each event is a
+                        // struct inotify_event header followed by
+                        // `len` bytes of name. The previous version
+                        // of this loop used `event->len` in the
+                        // for-statement's increment, and `continue`d
+                        // when `len <= 0`. That combination is an
+                        // infinite loop: continue skips the increment,
+                        // so `ptr` never advances and we reprocess
+                        // the same event forever. The correct shape
+                        // is to compute the event size once, validate
+                        // it, then advance unconditionally.
+                        for (auto ptr = buffer; ptr < buffer + length; )
                         {
-                            event = std::bit_cast<const inotify_event*>(ptr);
-                            if (event->len <= 0)
+                            const inotify_event* event = std::bit_cast<const inotify_event*>(ptr);
+                            size_t event_size = sizeof(inotify_event) + event->len;
+
+                            // Defensive: if the event header is
+                            // malformed (e.g. truncated at the tail
+                            // of the read), stop processing rather
+                            // than read past the buffer.
+                            if (event_size < sizeof(inotify_event) || ptr + event_size > buffer + length)
                             {
-                                continue;
+                                break;
                             }
 
                             // Check for relevant events: creation, modification, move, deletion
                             uint32_t relevant_mask = IN_CREATE | IN_MODIFY | IN_MOVED_TO | IN_DELETE;
-                            if (!(event->mask & relevant_mask))
+                            if (event->len > 0 && (event->mask & relevant_mask))
                             {
-                                continue;
-                            }
-
-                            // Look up the watched directory path for this wd
-                            auto wd_it = m_wd_to_path.find(event->wd);
-                            if (wd_it == m_wd_to_path.end())
-                            {
-                                continue;
-                            }
-
-                            const auto& watched_dir = wd_it->second;
-                            std::string name_string{event->name};
-
-                            // Debounce: skip if too soon after last notification
-                            auto now = std::chrono::high_resolution_clock::now();
-                            if (now - m_last_notification < m_min_duration_between_notifications)
-                            {
-                                continue;
-                            }
-
-                            // Notify all watches with the watched directory path
-                            // The callback uses file.parent_path().filename() for mod name
-                            // and file.filename().string() for directory name
-                            m_last_notification = now;
-                            for (const auto& watch : m_watches)
-                            {
-                                if (watch.name == "*" || name_string == watch.name)
+                                // Look up the watched directory path for this wd
+                                auto wd_it = m_wd_to_path.find(event->wd);
+                                if (wd_it != m_wd_to_path.end())
                                 {
-                                    // Pass the watched directory path so callback can determine mod name
-                                    watch.notify(watched_dir, false);
+                                    const auto& watched_dir = wd_it->second;
+                                    std::string name_string{event->name};
+
+                                    // Debounce: skip if too soon after last notification
+                                    auto now = std::chrono::high_resolution_clock::now();
+                                    if (now - m_last_notification >= m_min_duration_between_notifications)
+                                    {
+                                        m_last_notification = now;
+                                        for (const auto& watch : m_watches)
+                                        {
+                                            if (watch.name == "*" || name_string == watch.name)
+                                            {
+                                                watch.notify(watched_dir, false);
+                                            }
+                                        }
+                                    }
                                 }
                             }
+
+                            ptr += event_size;
                         }
-                    }
+
+                }
                 }
             }
         }
