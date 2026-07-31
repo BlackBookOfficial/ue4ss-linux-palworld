@@ -125,13 +125,26 @@ namespace RC
         };
         auto get_int64 = [&](const std::string& section, const std::string& key, int64_t def) -> int64_t {
             auto v = get_str(section, key);
-            if (!v) return def;
-            try { return std::stoll(*v); } catch (...) { return def; }
+            if (!v || v->empty()) return def;
+            // Never throw: on Linux, libsteam_api.so interposes __gxx_personality_v0 /
+            // __cxa_throw and aborts during unwinding BEFORE any catch handler runs,
+            // so try/catch around std::stoll is useless (SIGABRT in SettingsManager::
+            // deserialize). Use C strtoll (no exceptions); base 0 also accepts 0x hex.
+            errno = 0;
+            char* end = nullptr;
+            const long long result = std::strtoll(v->c_str(), &end, 0);
+            if (errno != 0 || end == v->c_str() || *end != '\0') return def;
+            return result;
         };
         auto get_float = [&](const std::string& section, const std::string& key, float def) -> float {
             auto v = get_str(section, key);
-            if (!v) return def;
-            try { return std::stof(*v); } catch (...) { return def; }
+            if (!v || v->empty()) return def;
+            // Never throw (see get_int64): use C strtof.
+            errno = 0;
+            char* end = nullptr;
+            const float result = std::strtof(v->c_str(), &end);
+            if (errno != 0 || end == v->c_str() || *end != '\0') return def;
+            return result;
         };
         auto to_string_type = [](const std::string& s) -> StringType {
             return StringType(s.begin(), s.end());
