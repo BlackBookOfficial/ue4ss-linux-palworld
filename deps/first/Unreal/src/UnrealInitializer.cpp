@@ -1385,8 +1385,11 @@ namespace RC::Unreal::UnrealInitializer
             return;
         }
 #endif
-        // We're assuming that KismetSystemLibrary, KismetSystemLibrary.Conv_NameToString, and the KismetSystemLibrary CDO exists.
-        // We will lock here forever if that's not the case.
+        // We assume the KSL class (KismetSystemLibrary or its UE4-era name
+        // KismetStringLibrary), its Conv_NameToString function, and its CDO
+        // exist. The lookup below tries both library names (UE5 renamed the
+        // class; Palworld is UE 5.1), and Conv_NameToString has a fallback
+        // path. We will lock here forever if none of them exist.
         // Consider adding a limit to how long we can wait.
         Output::send(STR("Locating KismetSystemLibrary...\n"));
         UClass* KismetStringLibrary{};
