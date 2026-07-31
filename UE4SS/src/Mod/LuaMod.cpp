@@ -6658,6 +6658,10 @@ Overloads:
         const Unreal::Hook::FCallbackOptions common_opts {false, false, STR("UE4SS"), STR("LuaModImpl")};
         Unreal::Hook::RegisterLoadMapPreCallback(
                 [](Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) {
+                // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+                // Unconditionally locking here deadlocks against LuaMod::update_async() (which holds the same mutex)
+                // whenever an actor lifecycle event fires while the async thread is mid-work.
+                if (m_load_map_pre_callbacks.empty()) { return; }
                 std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
                     TRY([&] {
                         for (const auto& callback_data : m_load_map_pre_callbacks)
@@ -6694,6 +6698,8 @@ Overloads:
 
         Unreal::Hook::RegisterLoadMapPostCallback(
                 [](Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) {
+                // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+                if (m_load_map_post_callbacks.empty()) { return; }
                 std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
                     TRY([&] {
                         for (const auto& callback_data : m_load_map_post_callbacks)
@@ -6729,6 +6735,8 @@ Overloads:
                 }, common_opts);
 
         Unreal::Hook::RegisterInitGameStatePreCallback([]([[maybe_unused]] Unreal::Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] Unreal::AGameModeBase* Context) {
+        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+        if (m_init_game_state_pre_callbacks.empty()) { return; }
         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             TRY([&] {
                 for (const auto& callback_data : m_init_game_state_pre_callbacks)
@@ -6747,6 +6755,8 @@ Overloads:
         }, common_opts);
 
         Unreal::Hook::RegisterInitGameStatePostCallback([]([[maybe_unused]] Unreal::Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] Unreal::AGameModeBase* Context) {
+        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+        if (m_init_game_state_post_callbacks.empty()) { return; }
         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             TRY([&] {
                 for (const auto& callback_data : m_init_game_state_post_callbacks)
@@ -6765,6 +6775,8 @@ Overloads:
         }, common_opts);
 
         Unreal::Hook::RegisterBeginPlayPreCallback([]([[maybe_unused]] Unreal::Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] Unreal::AActor* Context) {
+        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+        if (m_begin_play_pre_callbacks.empty()) { return; }
         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             TRY([&] {
                 for (const auto& callback_data : m_begin_play_pre_callbacks)
@@ -6783,6 +6795,8 @@ Overloads:
         }, common_opts);
 
         Unreal::Hook::RegisterBeginPlayPostCallback([]([[maybe_unused]] Unreal::Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] Unreal::AActor* Context) {
+        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+        if (m_begin_play_post_callbacks.empty()) { return; }
         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             TRY([&] {
                 for (const auto& callback_data : m_begin_play_post_callbacks)
@@ -6801,6 +6815,8 @@ Overloads:
         }, common_opts);
 
         Unreal::Hook::RegisterEndPlayPreCallback([]([[maybe_unused]] Unreal::Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] Unreal::AActor* Context, Unreal::EEndPlayReason EndPlayReason) {
+        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+        if (m_end_play_pre_callbacks.empty()) { return; }
         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             TRY([&] {
                 for (const auto& callback_data : m_end_play_pre_callbacks)
@@ -6821,6 +6837,8 @@ Overloads:
         }, common_opts);
 
         Unreal::Hook::RegisterEndPlayPostCallback([]([[maybe_unused]] Unreal::Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] Unreal::AActor* Context, Unreal::EEndPlayReason EndPlayReason) {
+        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+        if (m_end_play_post_callbacks.empty()) { return; }
         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             TRY([&] {
                 for (const auto& callback_data : m_end_play_post_callbacks)
@@ -6841,6 +6859,8 @@ Overloads:
         }, common_opts);
 
         Unreal::Hook::RegisterStaticConstructObjectPostCallback([](const Unreal::FStaticConstructObjectParameters&, Unreal::UObject* constructed_object) {
+        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+        if (m_static_construct_object_lua_callbacks.empty()) { return constructed_object; }
         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             return TRY([&] {
                 // IMPORTANT: StaticConstructObject can be called from outside of the game thread (loading threads, etc.)
@@ -6945,6 +6965,8 @@ Overloads:
 
         Unreal::Hook::RegisterULocalPlayerExecPreCallback([](Unreal::ULocalPlayer* context, Unreal::UWorld* in_world, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar)
                                                                   -> Unreal::Hook::ULocalPlayerExecCallbackReturnValue {
+                                                                  // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+                                                                  if (m_local_player_exec_pre_callbacks.empty()) { return Unreal::Hook::ULocalPlayerExecCallbackReturnValue{}; }
                                                                   std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             return TRY([&] {
                 for (const auto& callback_data : m_local_player_exec_pre_callbacks)
@@ -7002,6 +7024,8 @@ Overloads:
 
         Unreal::Hook::RegisterULocalPlayerExecPostCallback([](Unreal::ULocalPlayer* context, Unreal::UWorld* in_world, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar)
                                                                    -> Unreal::Hook::ULocalPlayerExecCallbackReturnValue {
+                                                                   // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+                                                                   if (m_local_player_exec_post_callbacks.empty()) { return Unreal::Hook::ULocalPlayerExecCallbackReturnValue{}; }
                                                                    std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             return TRY([&] {
                 for (const auto& callback_data : m_local_player_exec_post_callbacks)
@@ -7060,6 +7084,8 @@ Overloads:
         Unreal::Hook::RegisterCallFunctionByNameWithArgumentsPreCallback(
                 [](Unreal::UObject* context, const Unreal::TCHAR* str, Unreal::FOutputDevice& ar, Unreal::UObject* executor, bool b_force_call_with_non_exec)
                         -> std::pair<bool, bool> {
+                        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+                        if (m_call_function_by_name_with_arguments_pre_callbacks.empty()) { return {}; }
                         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
                     return TRY([&] {
                         std::pair<bool, bool> return_value{};
@@ -7103,6 +7129,8 @@ Overloads:
         Unreal::Hook::RegisterCallFunctionByNameWithArgumentsPostCallback(
                 [](Unreal::UObject* context, const Unreal::TCHAR* str, Unreal::FOutputDevice& ar, Unreal::UObject* executor, bool b_force_call_with_non_exec)
                         -> std::pair<bool, bool> {
+                        // Avoid taking the shared Lua mutex on the game thread when no mod has registered any callback.
+                        if (m_call_function_by_name_with_arguments_post_callbacks.empty()) { return {}; }
                         std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
                     return TRY([&] {
                         std::pair<bool, bool> return_value{};
@@ -7466,9 +7494,14 @@ Overloads:
             // Lua-state thread safety: the mod thread's async state shares the
             // mod's global_State with every other Lua state; serialize all
             // access against the game thread's detour callbacks.
-            std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
-            process_delayed_actions();
+            {
+                std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
+                process_delayed_actions();
+            }
 
+            // Sleep OUTSIDE the lock: holding the mutex during the sleep makes the
+            // async thread a near-permanent lock owner, so game-thread hooks that
+            // need the same mutex (BeginPlay/EndPlay/etc.) stall or deadlock.
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
