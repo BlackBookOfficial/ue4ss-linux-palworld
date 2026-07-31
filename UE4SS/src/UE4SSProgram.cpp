@@ -3865,10 +3865,84 @@ namespace RC
             }
         }
 
+        // Part #2 runs first: enumerate the mods directory and install + start
+        // all mods that have enabled.txt. This installs the mods (creates their
+        // objects, calls dlopen for C++ mods) so subsequent name-based lookups
+        // will find them. Without this ordering, Part #1's mods.txt lookup
+        // would always fail with "not found or not installed" because the mods
+        // haven't been installed yet.
+
         // Process each mods.txt file
+        // Part #2: Start all mods that have enabled.txt present in the mod directory.
+        // This runs FIRST so the mods are installed (objects created, dlopen done)
+        // before Part #1 tries to look them up by name. Without this ordering,
+        // Part #1's lookup would always fail with "not found or not installed"
+        // because the mods haven't been installed yet.
+        for (const auto& mods_directory : UE4SSProgram::get_program().get_mods_directories())
+        {
+            if (!std::filesystem::exists(mods_directory))
+            {
+                continue;
+            }
+
+            Output::send(STR("Starting mods (from enabled.txt ({}), no defined load order)...\n"), ensure_str(mods_directory));
+
+            for (const auto& mod_directory : std::filesystem::directory_iterator(mods_directory))
+            {
+                std::error_code ec{};
+
+                if (!mod_directory.is_directory(ec))
+                {
+                    continue;
+                }
+                if (ec.value() != 0)
+                {
+                    return fmt::format("is_directory ran into error {}", ec.value());
+                }
+
+                if (!std::filesystem::exists(mod_directory.path() / "enabled.txt", ec))
+                {
+                    continue;
+                }
+                if (ec.value() != 0)
+                {
+                    return fmt::format("exists ran into error {}", ec.value());
+                }
+
+                auto mod = UE4SSProgram::find_mod_by_name<ModType>(ensure_str(mod_directory.path().stem()), UE4SSProgram::IsInstalled::Yes);
+                if (!dynamic_cast<ModType*>(mod))
+                {
+                    continue;
+                }
+                if (!mod)
+                {
+                    Output::send<LogLevel::Warning>(STR("Found a mod with enabled.txt but mod has not been installed properly.\n"));
+                    continue;
+                }
+
+                if (mod->is_started())
+                {
+                    continue;
+                }
+
+                Output::send(STR("Mod '{}' has enabled.txt, starting mod.\n"), mod->get_name().data());
+#ifdef __linux__
+                bool ok = ue4ss_with_crash_recovery([&]() { mod->start_mod(); });
+                if (!ok)
+                {
+                    Output::send<LogLevel::Error>(STR("Mod '{}' crashed during startup (enabled.txt), continuing to next mod.\n"), mod->get_name().data());
+                }
+#else
+                mod->start_mod();
+#endif
+            }
+        }
+
+        // Part #1: Start mods listed in mods.txt that haven't been started yet.
+        // Runs AFTER Part #2 so mods are installed and findable by name.
+        // The is_started() check skips mods that Part #2 already started.
         for (const auto& enabled_mods_file : mods_txt_files_to_parse)
         {
-            // Part #1: Start all mods that are enabled in mods.txt.
             if (!std::filesystem::exists(enabled_mods_file))
             {
                 Output::send(STR("No mods.txt file found...\n"));
@@ -3960,67 +4034,6 @@ namespace RC
                         Output::send(STR("Mod '{}' disabled in mods.txt.\n"), mod_name);
                     }
                 }
-            }
-        }
-
-        // Part #2: Start all mods that have enabled.txt present in the mod directory.
-        for (const auto& mods_directory : UE4SSProgram::get_program().get_mods_directories())
-        {
-            if (!std::filesystem::exists(mods_directory))
-            {
-                continue;
-            }
-
-            Output::send(STR("Starting mods (from enabled.txt ({}), no defined load order)...\n"), ensure_str(mods_directory));
-
-            for (const auto& mod_directory : std::filesystem::directory_iterator(mods_directory))
-            {
-                std::error_code ec{};
-
-                if (!mod_directory.is_directory(ec))
-                {
-                    continue;
-                }
-                if (ec.value() != 0)
-                {
-                    return fmt::format("is_directory ran into error {}", ec.value());
-                }
-
-                if (!std::filesystem::exists(mod_directory.path() / "enabled.txt", ec))
-                {
-                    continue;
-                }
-                if (ec.value() != 0)
-                {
-                    return fmt::format("exists ran into error {}", ec.value());
-                }
-
-                auto mod = UE4SSProgram::find_mod_by_name<ModType>(ensure_str(mod_directory.path().stem()), UE4SSProgram::IsInstalled::Yes);
-                if (!dynamic_cast<ModType*>(mod))
-                {
-                    continue;
-                }
-                if (!mod)
-                {
-                    Output::send<LogLevel::Warning>(STR("Found a mod with enabled.txt but mod has not been installed properly.\n"));
-                    continue;
-                }
-
-                if (mod->is_started())
-                {
-                    continue;
-                }
-
-                Output::send(STR("Mod '{}' has enabled.txt, starting mod.\n"), mod->get_name().data());
-#ifdef __linux__
-                bool ok = ue4ss_with_crash_recovery([&]() { mod->start_mod(); });
-                if (!ok)
-                {
-                    Output::send<LogLevel::Error>(STR("Mod '{}' crashed during startup (enabled.txt), continuing to next mod.\n"), mod->get_name().data());
-                }
-#else
-                mod->start_mod();
-#endif
             }
         }
 
