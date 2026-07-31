@@ -129,11 +129,20 @@ namespace RC
             // Never throw: on Linux, libsteam_api.so interposes __gxx_personality_v0 /
             // __cxa_throw and aborts during unwinding BEFORE any catch handler runs,
             // so try/catch around std::stoll is useless (SIGABRT in SettingsManager::
-            // deserialize). Use C strtoll (no exceptions); base 0 also accepts 0x hex.
+            // deserialize). Use C strtoll (no exceptions). Base 10 by default so
+            // leading zeros are NOT treated as octal (e.g. "08"); base 16 only for
+            // an explicit 0x/0X prefix (strtoll accepts the prefix at base 16).
             errno = 0;
             char* end = nullptr;
-            const long long result = std::strtoll(v->c_str(), &end, 0);
-            if (errno != 0 || end == v->c_str() || *end != '\0') return def;
+            const std::string& s = *v;
+            const int base = (s.size() > 1 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) ? 16 : 10;
+            const long long result = std::strtoll(s.c_str(), &end, base);
+            if (errno != 0 || end == s.c_str() || *end != '\0')
+            {
+                UE4SS_LOG("[UE4SS] SettingsManager: invalid int64 for [%s] %s = \"%s\", using default %lld\n",
+                          section.c_str(), key.c_str(), s.c_str(), static_cast<long long>(def));
+                return def;
+            }
             return result;
         };
         auto get_float = [&](const std::string& section, const std::string& key, float def) -> float {
@@ -143,7 +152,12 @@ namespace RC
             errno = 0;
             char* end = nullptr;
             const float result = std::strtof(v->c_str(), &end);
-            if (errno != 0 || end == v->c_str() || *end != '\0') return def;
+            if (errno != 0 || end == v->c_str() || *end != '\0')
+            {
+                UE4SS_LOG("[UE4SS] SettingsManager: invalid float for [%s] %s = \"%s\", using default %f\n",
+                          section.c_str(), key.c_str(), v->c_str(), static_cast<double>(def));
+                return def;
+            }
             return result;
         };
         auto to_string_type = [](const std::string& s) -> StringType {
