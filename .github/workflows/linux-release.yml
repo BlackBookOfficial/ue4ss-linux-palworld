@@ -25,7 +25,15 @@ concurrency:
 jobs:
   build-and-release:
     name: Build and Publish Linux Release
+    # Build inside Debian 12 (bookworm) so the released .so targets
+    # glibc 2.36 and GLIBCXX_3.4.30. Building on Ubuntu 24.04 produces
+    # a .so that requires glibc 2.39, which won't run on Debian 12
+    # inference providers or older distros. The runner is still
+    # ubuntu-24.04 (GitHub-hosted); the container directive runs all
+    # steps inside the Debian 12 image.
     runs-on: ubuntu-24.04
+    container:
+      image: debian:12
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -41,14 +49,17 @@ jobs:
         run: echo "TAG_NAME=${{ inputs.tag_name != '' && inputs.tag_name || github.ref_name }}" >> $GITHUB_ENV
 
       - name: Install dependencies
+        # Debian 12 package names. The release artifact targets
+        # glibc 2.36 and GLIBCXX 3.4.30 (GCC 12) so it runs on
+        # the widest range of host systems, including inference
+        # providers limited to those versions.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake ninja-build pkg-config \
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config git ca-certificates curl \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libgl-dev libegl-dev libgles-dev \
-            gcc g++ binutils
-
+            gcc g++ binutils zip xz-utils
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -219,8 +230,8 @@ jobs:
           Commit: $(git rev-parse HEAD)
           Branch: $(git branch --show-current)
           Build Type: Game__Dev__Linux64
-          Compiler: $(gcc --version | head -1)
-          Build Host: ubuntu-24.04 (x86_64)
+          Compiler: $(g++ --version | head -1)
+          Build Host: debian-12 (bookworm, x86_64)
           GUI: Enabled (GLFW3/OpenGL3)
           Input: Disabled
           Profilers: Disabled
@@ -254,7 +265,16 @@ jobs:
           EOF
 
       - name: Package tarball
+        # .tar.gz for Linux users who prefer the standard Unix
+        # archive format.
         run: tar -C release/package -czf "ue4ss-linux-palworld-${TAG_NAME}.tar.gz" .
+
+      - name: Package zip
+        # .zip for mod-hosting sites (NexusMods, etc.) that only
+        # accept zip uploads. Same contents as the tarball.
+        run: |
+          (cd release/package && zip -qr "../ue4ss-linux-palworld-${TAG_NAME}.zip" .)
+
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -282,23 +302,27 @@ jobs:
             - GUI: Enabled (GLFW3/OpenGL3)
             - Input: Disabled
             - Profilers: Disabled
-            - Compiler: GCC (Ubuntu 24.04)
-            
+            - Compiler: GCC 12 (Debian 12 bookworm)
+
             ### Artifacts
-            - `ue4ss-linux-palworld-<tag>.tar.gz` — Full drop-in: library, settings, Mods folder, config
+            - `ue4ss-linux-palworld-<tag>.tar.gz` — Standard Unix archive, full drop-in: library, settings, Mods folder, config
+            - `ue4ss-linux-palworld-<tag>.zip` — Zip archive with identical contents, for mod-hosting sites (NexusMods, etc.) that only accept zip uploads
             - `libUE4SS.so` — Stripped shared library only (advanced users)
             - `BUILD_INFO.txt` — Build metadata
-            
+
             ### Usage
             ```bash
             LD_PRELOAD=./libUE4SS.so ./YourGameBinary
             ```
-            
+
             ### Compatibility
-            - Built on Ubuntu 24.04 (x86_64)
+            - Built on Debian 12 (bookworm), x86_64
+            - Minimum runtime: glibc 2.36, GLIBCXX 3.4.30 (GCC 12)
+            - Runs on: Debian 12+, Ubuntu 22.04+ (with backports), and any distro with glibc ≥ 2.36
             - Requires: libGL, libEGL, libX11, libXrandr, libXinerama, libXcursor, libXi
             - Engine Tick Hook: Auto-detected via dlsym (or manual override in UE4SS_Addresses.ini)
           files: |
             ue4ss-linux-palworld-${{ env.TAG_NAME }}.tar.gz
+            ue4ss-linux-palworld-${{ env.TAG_NAME }}.zip
             release/libUE4SS.so
             release/BUILD_INFO.txt
