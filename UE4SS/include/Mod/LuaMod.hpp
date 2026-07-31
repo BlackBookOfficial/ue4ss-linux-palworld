@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -178,6 +179,28 @@ namespace RC
         static inline std::vector<LuaCallbackData> m_end_play_post_callbacks{};
         static inline std::vector<FunctionHookData> m_script_hook_callbacks{};
         static inline bool m_is_currently_executing_game_action{};
+        // Sticky atomic flags: set (release) right after the first emplace_back on each callback
+        // container, never cleared. Hook fast-paths read them (acquire) BEFORE acquiring
+        // m_thread_actions_mutex, so the empty-check itself is never a data race against
+        // mutex-guarded writers (mod load on the init thread, LoopAsync on the async thread,
+        // uninstall on the update thread). A stale "false" merely skips one event (benign
+        // TOCTOU); a "true" guarantees the emplace that set it happens-before the read, and
+        // iteration still happens under the mutex. Erase paths never clear the flags: a
+        // container that becomes empty again just pays one bounded mutex acquisition per
+        // event, which is now safe because update_async sleeps outside the lock.
+        static inline std::atomic<bool> m_load_map_pre_callbacks_registered{false};
+        static inline std::atomic<bool> m_load_map_post_callbacks_registered{false};
+        static inline std::atomic<bool> m_init_game_state_pre_callbacks_registered{false};
+        static inline std::atomic<bool> m_init_game_state_post_callbacks_registered{false};
+        static inline std::atomic<bool> m_begin_play_pre_callbacks_registered{false};
+        static inline std::atomic<bool> m_begin_play_post_callbacks_registered{false};
+        static inline std::atomic<bool> m_end_play_pre_callbacks_registered{false};
+        static inline std::atomic<bool> m_end_play_post_callbacks_registered{false};
+        static inline std::atomic<bool> m_static_construct_object_callbacks_registered{false};
+        static inline std::atomic<bool> m_ulocal_player_exec_pre_callbacks_registered{false};
+        static inline std::atomic<bool> m_ulocal_player_exec_post_callbacks_registered{false};
+        static inline std::atomic<bool> m_call_function_by_name_pre_callbacks_registered{false};
+        static inline std::atomic<bool> m_call_function_by_name_post_callbacks_registered{false};
         static inline std::recursive_mutex m_thread_actions_mutex{};
 
       private:
