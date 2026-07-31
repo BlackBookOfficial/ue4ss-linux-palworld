@@ -1385,7 +1385,7 @@ namespace RC::Unreal::UnrealInitializer
             return;
         }
 #endif
-        // We're assuming that KismetStringLibrary, KismetStringLibrary.Conv_NameToString, and the KismetStringLibrary CDO exists.
+        // We're assuming that KismetSystemLibrary, KismetSystemLibrary.Conv_NameToString, and the KismetSystemLibrary CDO exists.
         // We will lock here forever if that's not the case.
         // Consider adding a limit to how long we can wait.
         Output::send(STR("Locating KismetSystemLibrary...\n"));
@@ -1400,7 +1400,7 @@ namespace RC::Unreal::UnrealInitializer
             auto wait_start = std::chrono::steady_clock::now();
             while (!KismetStringLibrary)
             {
-                KismetStringLibrary = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings({STR("/Script/Engine"), STR("KismetStringLibrary")}));
+                KismetStringLibrary = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings({STR("/Script/Engine"), STR("KismetSystemLibrary")}));
 #ifdef __linux__
                 Output::send(STR("KSL lookup: result={}\n"), (void*)KismetStringLibrary);
 #endif
@@ -1408,7 +1408,7 @@ namespace RC::Unreal::UnrealInitializer
                 {
                     if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - wait_start).count() > 30)
                     {
-                        Output::send<LogLevel::Warning>(STR("Timeout locating KismetStringLibrary. FName::ToString via Conv_NameToString will not be available.\n"));
+                        Output::send<LogLevel::Warning>(STR("Timeout locating KismetSystemLibrary. FName::ToString via Conv_NameToString will not be available.\n"));
                         break;
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
