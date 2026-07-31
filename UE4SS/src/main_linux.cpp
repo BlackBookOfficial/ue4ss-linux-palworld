@@ -111,23 +111,7 @@ static void ue4ss_sigsegv_handler(int sig, siginfo_t* info, void* ucontext)
     uintptr_t rax = uc ? uc->uc_mcontext.gregs[REG_RAX] : 0;
     uintptr_t fault_addr = info ? (uintptr_t)info->si_addr : 0;
     UE4SS_ERR("[UE4SS] signal handler: sig=%d alloc=%d iter=%d mod=%d init=%d rip=0x%lx fault=0x%lx rdi=0x%lx rsi=0x%lx rdx=0x%lx rax=0x%lx\n", sig, s_has_alloc_jmpbuf, s_has_iter_jmpbuf, s_has_mod_jmpbuf, s_has_jmpbuf, (unsigned long)rip, (unsigned long)fault_addr, (unsigned long)rdi, (unsigned long)rsi, (unsigned long)rdx, (unsigned long)rax);
-    // Check per-mod recovery first. The mod recovery is the most robust
-    // recovery — it covers the entire mod execution context. Checking it
-    // before the alloc/iter recovery prevents a crash in non-allocator
-    // code (e.g. distorm's disassembler inside the Lua error handler)
-    // from being caught by the alloc recovery, which would return false,
-    // cause the code to proceed with a null pointer, and cascade into a
-    // harder-to-recover crash. The alloc/iter recovery is for specific
-    // known-safe operations (FMemory::Malloc/Realloc/Free and
-    // ForEachUObject iteration); if a crash happens outside those, we
-    // want the mod recovery to handle it.
-    if (s_has_mod_jmpbuf)
-    {
-        UE4SS_ERR("[UE4SS] Caught signal %d during mod execution, recovering...\n", sig);
-        s_has_mod_jmpbuf = false;
-        siglongjmp(s_mod_jmpbuf, sig);
-    }
-    // Check per-call allocator recovery next (FMemory::Malloc/Realloc/Free)
+    // Check per-call allocator recovery first (FMemory::Malloc/Realloc/Free)
     if (s_has_alloc_jmpbuf)
     {
         s_has_alloc_jmpbuf = false;
@@ -138,6 +122,13 @@ static void ue4ss_sigsegv_handler(int sig, siginfo_t* info, void* ucontext)
     {
         s_has_iter_jmpbuf = false;
         siglongjmp(s_iter_jmpbuf, sig);
+    }
+    // Check per-mod recovery next
+    if (s_has_mod_jmpbuf)
+    {
+        UE4SS_ERR("[UE4SS] Caught signal %d during mod execution, recovering...\n", sig);
+        s_has_mod_jmpbuf = false;
+        siglongjmp(s_mod_jmpbuf, sig);
     }
     if (s_has_jmpbuf)
     {
