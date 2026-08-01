@@ -1689,7 +1689,64 @@ namespace RC
                     }
                     else
                     {
-                        UE4SS_DBG( "[UE4SS] dlsym: UGameEngine::Tick not found (stripped binary?)\n");
+                        UE4SS_DBG("[UE4SS] dlsym: UGameEngine::Tick not found (stripped binary?), trying AOB scan...\n");
+
+                        // AOB-Scan fallback for UGameEngine::Tick.
+                        // Palworld's Linux server strips the symbol from dynsym so dlsym fails;
+                        // this 24-byte signature is verified against the 140MB Palworld server
+                        // binary (2026-08-01): exactly 1 hit (20-byte prefix has 6 hits, so the
+                        // full 24 bytes are required). UGameEngine::Tick(float DeltaSeconds):
+                        //   push rbp; push r15..r12; push rbx; sub rsp,0x58; mov r12,rdi;
+                        //   mov rdi,[rdi+0x9E0]
+                        const uint8_t pattern[] = {
+                            0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53,
+                            0x48, 0x83, 0xEC, 0x58, 0x49, 0x89, 0xFC, 0x48, 0x8B, 0xBF,
+                            0xE0, 0x09, 0x00, 0x00
+                        };
+                        const size_t pattern_len = sizeof(pattern);
+
+                        struct ExecSegment { uint8_t* start; size_t size; };
+                        std::vector<ExecSegment> exec_segments;
+
+                        dl_iterate_phdr([](struct dl_phdr_info* info, size_t, void* data) -> int {
+                            auto* segs = static_cast<std::vector<ExecSegment>*>(data);
+                            for (int i = 0; i < info->dlpi_phnum; i++) {
+                                const ElfW(Phdr)* phdr = &info->dlpi_phdr[i];
+                                if (phdr->p_type == PT_LOAD && (phdr->p_flags & PF_X)) {
+                                    uint8_t* seg_start = reinterpret_cast<uint8_t*>(info->dlpi_addr + phdr->p_vaddr);
+                                    size_t seg_size = phdr->p_memsz;
+                                    if (seg_size > 0x1000) segs->push_back({seg_start, seg_size});
+                                }
+                            }
+                            return 0;
+                        }, &exec_segments);
+
+                        void* found_func = nullptr;
+                        for (const auto& seg : exec_segments)
+                        {
+                            if (seg.size < pattern_len) continue;
+                            for (size_t offset = 0; offset + pattern_len <= seg.size; offset++)
+                            {
+                                if (memcmp(seg.start + offset, pattern, pattern_len) != 0) continue;
+                                // Prologue sanity: a function entry is 16-byte aligned (push rbp prologue)
+                                if ((reinterpret_cast<uintptr_t>(seg.start + offset) % 16) != 0) continue;
+                                found_func = seg.start + offset;
+                                UE4SS_DBG("[UE4SS] AOB scan: UGameEngine::Tick candidate at %p\n", found_func);
+                                break;
+                            }
+                            if (found_func) break;
+                        }
+
+                        if (found_func)
+                        {
+                            addr = found_func;
+                            Unreal::UEngine::TickInternal.assign_address(addr);
+                            scan_result.SuccessMessage.emplace_back(STR("UGameEngine::Tick found via AOB scan"));
+                        }
+                        else
+                        {
+                            UE4SS_DBG("[UE4SS] AOB scan: UGameEngine::Tick not found\n");
+                        }
                     }
                 };
 
