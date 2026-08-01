@@ -7558,14 +7558,25 @@ Overloads:
             auto sleep_ms = 50;
             {
                 std::lock_guard<std::mutex> guard{m_actions_lock};
-                const auto now = std::chrono::steady_clock::now();
-                for (const auto& action : m_delayed_actions)
+                // A freshly enqueued action may still sit in m_pending_actions
+                // (it is drained into m_delayed_actions at the top of the next
+                // process_delayed_actions call). Never sleep long while one is
+                // waiting, or its requested delay is inflated by the wake latency.
+                if (!m_pending_actions.empty())
                 {
-                    const auto due = action.created_at + std::chrono::milliseconds(action.delay);
-                    const auto remain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(due - now).count();
-                    if (remain_ms < sleep_ms)
+                    sleep_ms = 1;
+                }
+                else
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    for (const auto& action : m_delayed_actions)
                     {
-                        sleep_ms = remain_ms > 0 ? static_cast<int>(remain_ms) : 1;
+                        const auto due = action.created_at + std::chrono::milliseconds(action.delay);
+                        const auto remain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(due - now).count();
+                        if (remain_ms < sleep_ms)
+                        {
+                            sleep_ms = remain_ms > 0 ? static_cast<int>(remain_ms) : 1;
+                        }
                     }
                 }
             }
