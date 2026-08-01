@@ -740,8 +740,15 @@ namespace RC::Unreal::UObjectGlobals
                     Object = ObjectItem->GetUObject();
                     if (!Object) { return; }
                     if (ObjectItem->IsUnreachable()) { return; }
-                    int32_t item_flags = *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(ObjectItem) + 0x8);
-                    if (item_flags == 0) { return; }
+// NOTE (PR #4 + PR #10): the original Linux port added TWO over-filters
+                    // that amputated the live-world portion of the UObject array:
+                    //   - the hardcoded 0x7e-0x7f address range (rejects every object on
+                    //     this non-PIE binary, whose heap maps at 0x73-0x7c)
+                    //   - the EInternalObjectFlags==0 filter (zero flags is the STEADY
+                    //     STATE for ordinary actors; only set during GC marking/rooting)
+                    // Freed slots are already handled by the null-Object check above and
+                    // the per-iteration ue4ss_with_iter_recovery wrapper handles stale
+                    // pointers. Neither filter is needed; remove both.
                     GUOBJECTARRAY_PROFILE_ITER_COUNT()
                     iter_action = Callable(Object, ChunkIndex, ItemIndex);
                 });
