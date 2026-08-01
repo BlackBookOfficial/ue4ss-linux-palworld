@@ -4194,6 +4194,15 @@ Overloads:
                                    [[maybe_unused]] Unreal::UFunction* Function,
                                    [[maybe_unused]] void* Parms) -> void
     {
+        // Fast path: same sticky-flag gate as engine_tick_hook — skip the lock
+        // cycles entirely when no mod has ever registered actions for this hook.
+        if (!LuaMod::m_game_thread_actions_registered.load(std::memory_order_acquire)
+            && !LuaMod::m_delayed_game_thread_actions_registered.load(std::memory_order_acquire)
+            && !LuaMod::m_notify_on_new_object_callbacks_registered.load(std::memory_order_acquire))
+        {
+            return;
+        }
+
         {
             std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             LuaMod::m_is_processing_actions = true;
@@ -4231,6 +4240,16 @@ Overloads:
                                  [[maybe_unused]] float DeltaSeconds,
                                  [[maybe_unused]] bool bIdle) -> void
     {
+        // Fast path: skip the whole tick (3+ mutex cycles + vector churn) when no mod
+        // has ever registered engine-tick/delayed/notify actions. Sticky flags are
+        // acquired BEFORE the first lock — same pattern as the lifecycle hooks above.
+        if (!LuaMod::m_engine_tick_actions_registered.load(std::memory_order_acquire)
+            && !LuaMod::m_delayed_game_thread_actions_registered.load(std::memory_order_acquire)
+            && !LuaMod::m_notify_on_new_object_callbacks_registered.load(std::memory_order_acquire))
+        {
+            return;
+        }
+
         {
             std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
             LuaMod::m_is_processing_actions = true;
@@ -4485,10 +4504,12 @@ Overloads:
                 if (LuaMod::m_is_processing_actions)
                 {
                     LuaMod::m_pending_engine_tick_actions.emplace_back(simpleAction);
+                    LuaMod::m_engine_tick_actions_registered.store(true, std::memory_order_release);
                 }
                 else
                 {
                     LuaMod::m_engine_tick_actions.emplace_back(simpleAction);
+                    LuaMod::m_engine_tick_actions_registered.store(true, std::memory_order_release);
                 }
             }
             else
@@ -4497,10 +4518,12 @@ Overloads:
                 if (LuaMod::m_is_processing_actions)
                 {
                     LuaMod::m_pending_game_thread_actions.emplace_back(simpleAction);
+                    LuaMod::m_game_thread_actions_registered.store(true, std::memory_order_release);
                 }
                 else
                 {
                     LuaMod::m_game_thread_actions.emplace_back(simpleAction);
+                    LuaMod::m_game_thread_actions_registered.store(true, std::memory_order_release);
                 }
             }
 
@@ -4607,10 +4630,12 @@ Overloads:
                 if (LuaMod::m_is_processing_actions)
                 {
                     LuaMod::m_pending_delayed_game_thread_actions.emplace_back(action);
+                    LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
                 }
                 else
                 {
                     LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                    LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
                 }
 
                 return 0;
@@ -4642,10 +4667,12 @@ Overloads:
                 if (LuaMod::m_is_processing_actions)
                 {
                     LuaMod::m_pending_delayed_game_thread_actions.emplace_back(action);
+                    LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
                 }
                 else
                 {
                     LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                    LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
                 }
 
                 lua.set_integer(action.handle);
@@ -4751,10 +4778,12 @@ Overloads:
             if (LuaMod::m_is_processing_actions)
             {
                 LuaMod::m_pending_delayed_game_thread_actions.emplace_back(action);
+                LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
             }
             else
             {
                 LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
             }
 
             return 0;
@@ -4804,10 +4833,12 @@ Overloads:
             if (LuaMod::m_is_processing_actions)
             {
                 LuaMod::m_pending_delayed_game_thread_actions.emplace_back(action);
+                LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
             }
             else
             {
                 LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
             }
             LuaMod::ensure_engine_tick_hooked();
 
@@ -4885,10 +4916,12 @@ Overloads:
             if (LuaMod::m_is_processing_actions)
             {
                 LuaMod::m_pending_delayed_game_thread_actions.emplace_back(action);
+                LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
             }
             else
             {
                 LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
             }
 
             lua.set_integer(action.handle);
@@ -4941,10 +4974,12 @@ Overloads:
             if (LuaMod::m_is_processing_actions)
             {
                 LuaMod::m_pending_delayed_game_thread_actions.emplace_back(action);
+                LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
             }
             else
             {
                 LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                LuaMod::m_delayed_game_thread_actions_registered.store(true, std::memory_order_release);
             }
             LuaMod::ensure_engine_tick_hooked();
 
@@ -6932,6 +6967,7 @@ Overloads:
                                         serial
                                     }
                                 );
+                                LuaMod::m_notify_on_new_object_callbacks_registered.store(true, std::memory_order_release);
                             }
                         }
                     }
@@ -7466,10 +7502,33 @@ Overloads:
             // Lua-state thread safety: the mod thread's async state shares the
             // mod's global_State with every other Lua state; serialize all
             // access against the game thread's detour callbacks.
-            std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
-            process_delayed_actions();
+            {
+                std::lock_guard<std::recursive_mutex> ue4ss_lua_guard{LuaMod::m_thread_actions_mutex}; // Lua-state thread safety
+                process_delayed_actions();
+            }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            // Sleep OUTSIDE the lock: holding the mutex during the sleep makes the
+            // async thread a near-permanent lock owner, so game-thread hooks that
+            // need the same mutex (BeginPlay/EndPlay/etc.) stall or deadlock.
+            // Adaptive cadence: a fixed 5ms sleep wakes the thread at 200Hz even on
+            // an idle server. Instead, sleep 50ms when no async action is queued,
+            // and wake just before the next due action when one is scheduled
+            // (Immediate actions with delay=0 always wake at the 1ms floor).
+            auto sleep_ms = 50;
+            {
+                std::lock_guard<std::mutex> guard{m_actions_lock};
+                const auto now = std::chrono::steady_clock::now();
+                for (const auto& action : m_delayed_actions)
+                {
+                    const auto due = action.created_at + std::chrono::milliseconds(action.delay);
+                    const auto remain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(due - now).count();
+                    if (remain_ms < sleep_ms)
+                    {
+                        sleep_ms = remain_ms > 0 ? static_cast<int>(remain_ms) : 1;
+                    }
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
         }
     }
 

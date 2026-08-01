@@ -178,6 +178,19 @@ namespace RC
         static inline std::vector<LuaCallbackData> m_end_play_post_callbacks{};
         static inline std::vector<FunctionHookData> m_script_hook_callbacks{};
         static inline bool m_is_currently_executing_game_action{};
+        // Tick-path action containers (engine_tick / game_thread / delayed / notify):
+        // same sticky-flag pattern as the lifecycle hooks — set (release) right after
+        // the first emplace, never cleared. The EngineTick and ProcessEvent hooks
+        // check these BEFORE the first mutex acquisition, so an idle tick costs one
+        // acquire-load pair instead of 3+ lock cycles (m_is_processing_actions dance
+        // + process_* + pending drain). A stale "false" skips one tick's processing
+        // (benign — the registration that set it will be picked up next tick); a
+        // "true" guarantees the emplace happens-before the read, and iteration still
+        // runs under the mutex. Erase paths never clear the flags.
+        static inline std::atomic<bool> m_engine_tick_actions_registered{false};
+        static inline std::atomic<bool> m_game_thread_actions_registered{false};
+        static inline std::atomic<bool> m_delayed_game_thread_actions_registered{false};
+        static inline std::atomic<bool> m_notify_on_new_object_callbacks_registered{false};
         static inline std::recursive_mutex m_thread_actions_mutex{};
 
       private:
