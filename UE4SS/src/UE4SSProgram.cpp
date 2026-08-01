@@ -1708,8 +1708,16 @@ namespace RC
                         struct ExecSegment { uint8_t* start; size_t size; };
                         std::vector<ExecSegment> exec_segments;
 
+                        // Restrict to the MAIN EXECUTABLE only (dlpi_name == ""): the
+                        // signature is verified unique in the Palworld server binary, but
+                        // scanning every loaded DSO's executable segments invites a
+                        // false-positive hit in a shared library and wastes scan time.
+                        // Same filter as the FMalloc heuristic below.
                         dl_iterate_phdr([](struct dl_phdr_info* info, size_t, void* data) -> int {
                             auto* segs = static_cast<std::vector<ExecSegment>*>(data);
+                            const char* name = info->dlpi_name;
+                            // Skip shared libraries (only process main exe with empty name)
+                            if (name && name[0] != '\0') return 0;
                             for (int i = 0; i < info->dlpi_phnum; i++) {
                                 const ElfW(Phdr)* phdr = &info->dlpi_phdr[i];
                                 if (phdr->p_type == PT_LOAD && (phdr->p_flags & PF_X)) {
@@ -1721,7 +1729,10 @@ namespace RC
                             return 0;
                         }, &exec_segments);
 
-                        void* found_func = nullptr;
+                        // Count ALL matches; refuse to assign unless exactly one. A future
+                        // build could produce >1 hit for this signature — hooking the first
+                        // match blindly would hook the wrong function.
+                        std::vector<void*> matches{};
                         for (const auto& seg : exec_segments)
                         {
                             if (seg.size < pattern_len) continue;
@@ -1730,22 +1741,21 @@ namespace RC
                                 if (memcmp(seg.start + offset, pattern, pattern_len) != 0) continue;
                                 // Prologue sanity: a function entry is 16-byte aligned (push rbp prologue)
                                 if ((reinterpret_cast<uintptr_t>(seg.start + offset) % 16) != 0) continue;
-                                found_func = seg.start + offset;
-                                UE4SS_DBG("[UE4SS] AOB scan: UGameEngine::Tick candidate at %p\n", found_func);
-                                break;
+                                matches.push_back(seg.start + offset);
                             }
-                            if (found_func) break;
                         }
 
-                        if (found_func)
+                        if (matches.size() == 1)
                         {
+                            const auto found_func = matches[0];
                             addr = found_func;
+                            UE4SS_DBG("[UE4SS] AOB scan: UGameEngine::Tick candidate at %p\n", found_func);
                             Unreal::UEngine::TickInternal.assign_address(addr);
                             scan_result.SuccessMessage.emplace_back(STR("UGameEngine::Tick found via AOB scan"));
                         }
                         else
                         {
-                            UE4SS_DBG("[UE4SS] AOB scan: UGameEngine::Tick not found\n");
+                            UE4SS_DBG("[UE4SS] AOB scan: UGameEngine::Tick ambiguous (%zu hits) or not found; keeping vtable fallback\n", matches.size());
                         }
                     }
                 };
