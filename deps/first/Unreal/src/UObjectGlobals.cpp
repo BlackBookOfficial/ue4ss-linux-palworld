@@ -772,8 +772,15 @@ namespace RC::Unreal::UObjectGlobals
                     if (ObjectItem->IsUnreachable()) { return; }
                     uintptr_t obj_addr = reinterpret_cast<uintptr_t>(Object);
                     if (obj_addr < 0x7e0000000000 || obj_addr > 0x7fffffffffff) { return; }
-                    int32_t item_flags = *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(ObjectItem) + 0x8);
-                    if (item_flags == 0) { return; }
+                    // NOTE: the old EInternalObjectFlags==0 filter (added in the
+                    // BlackBook Linux port, 0dd6681) skipped almost every live
+                    // gameplay object: zero flags is the STEADY STATE for
+                    // ordinary actors (the bits are only set during GC
+                    // marking/rooting). Freed slots are already handled by the
+                    // null-Object check above; the per-iteration recovery
+                    // wrapper handles stale pointers. The flags filter was
+                    // redundant AND amputated the pal/base-camp population
+                    // (census saw only root-set engine assets).
                     GUOBJECTARRAY_PROFILE_ITER_COUNT()
                     iter_action = Callable(Object, ChunkIndex, ItemIndex);
                 });
