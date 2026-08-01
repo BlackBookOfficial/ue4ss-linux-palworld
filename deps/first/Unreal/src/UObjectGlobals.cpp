@@ -734,8 +734,15 @@ namespace RC::Unreal::UObjectGlobals
         // while we iterate, causing use-after-free if we re-read it per chunk.
         const auto ChunksPtrCached = ObjObjects.GetObjects();
         if (!ChunksPtrCached) return;
-        const int32_t SafeElementLimit = 4 * TUObjectArray::NumElementsPerChunk;
-        const int32_t EffectiveNumElements = NumElements < SafeElementLimit ? NumElements : SafeElementLimit;
+        // NOTE: the old walk-era cap (SafeElementLimit = 4 chunks = 262144
+        // elements) silently amputated everything past chunk 3 — the streamed
+        // world. On the idle server the array is ~357k objects (6 chunks);
+        // with a player joined it grows to 400k+ (7 chunks), so chunk-4+
+        // objects (pals, drops, base camps, the player) were NEVER visited.
+        // The per-iteration ue4ss_with_iter_recovery below is the real safety
+        // mechanism (it handles stale/GC'd entries); the cap added nothing and
+        // broke world visibility. Use the authoritative element count.
+        const int32_t EffectiveNumElements = NumElements;
 #else
         const int32_t EffectiveNumElements = NumElements;
 #endif
