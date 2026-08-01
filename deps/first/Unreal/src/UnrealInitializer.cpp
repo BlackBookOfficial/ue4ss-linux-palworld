@@ -1159,7 +1159,7 @@ namespace RC::Unreal::UnrealInitializer
                 //   - baked slot value: 0xaa3c2c0 = PostExit (28-byte fn)
                 UEngine::VTableLayoutMap[STR("Tick")] = 0x308;
 
-                Output::send(STR("Palworld vtable override: +8 shift applied to all UObject-derived maps from 0x260, FProperty GetMinAlignment=0x150, UEngine::Tick=0x308\n"));
+                Output::send(STR("Palworld vtable override: individually-verified offsets (UObject ProcessEvent=0x268, AActor BeginPlay=0x388 EndPlay=0x390, GameMode InitGameState=0x740, FProperty GetMinAlignment=0x150, UEngine Tick=0x308)\n"));
 
                 // Self-healing sweep: re-derive the AActor-region offsets from
                 // the binary by consensus over all AActor-family vtables, so a
