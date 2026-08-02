@@ -31,6 +31,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstring>
+#include <cstdio>
+#include <ctime>
 #endif
 
 namespace fs = std::filesystem;
@@ -98,28 +100,58 @@ namespace RC
 #ifdef __linux__
     static bool FullMemoryDump = false;
 
+    // Working directory captured ONCE at enable(): get_working_directory() allocates,
+    // so it must not run inside the crash handler — the allocator may be corrupted or
+    // locked there. Captured BEFORE the signal handlers are installed so the handler
+    // can never observe a partially-assigned string (the handler only reads c_str(),
+    // no allocation).
+    static std::string s_crash_dir;
+
     static auto linux_crash_handler(int sig) -> void
     {
-        // Get the working directory
-        StringType working_dir;
-        try
-        {
-            working_dir = StringType{UE4SSProgram::get_program().get_working_directory()};
-        }
-        catch (...)
-        {
-            working_dir = STR(".");
-        }
+        // Report writer designed to keep working when the allocator/locks are broken:
+        // no allocation, no stdio, no C++ runtime calls. The previous implementation
+        // used fmt::format / std::string / get_now_as_string / UE4SS_DBG inside the
+        // handler — all of which allocate and lock. When the crash IS heap corruption
+        // (or the allocator is already wedged), those calls deadlock the game thread
+        // INSIDE the handler, so the re-raise never runs and the process survives
+        // wedged — the observed "signal 0 + empty report + surviving game thread"
+        // signature from the Palworld wedge saga.
+        //
+        // Async-safety note (strict POSIX): open/write/close/time/fork/_exit/kill are
+        // POSIX async-signal-safe. snprintf/backtrace/backtrace_symbols_fd are not on
+        // the POSIX list, but glibc documents backtrace_symbols_fd as safe in signal
+        // handlers (no malloc), and snprintf on a stack buffer performs no locking in
+        // practice — the fork()-writer bounds the worst case: if the child wedges in
+        // the handler, the parent has already returned and re-raised.
 
-        auto now_str = get_now_as_string(STR("{:%Y_%m_%d_%H_%M_%S}"));
-        auto crash_path_str = fmt::format(STR("{}/crash_{}.txt"), working_dir, now_str);
-        auto crash_path_utf8 = to_string(crash_path_str);
-
-        int fd = open(crash_path_utf8.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd >= 0)
+        // fork()-writer: the parent re-raises immediately, so the game thread can
+        // never wedge in the handler even if the writer itself hangs. The child
+        // inherits the crashed state but only uses async-signal-safe syscalls.
+        pid_t pid = fork();
+        if (pid == 0)
         {
-            const char* header = "=== UE4SS Crash Report ===\n";
-            ssize_t wr = write(fd, header, strlen(header));
+            // Child: write the report, then _exit — never return into the crash frame.
+            char path[1024];
+            int path_len = snprintf(path, sizeof(path), "%s/crash_%lld.txt",
+                                    s_crash_dir.c_str(), static_cast<long long>(time(nullptr)));
+            if (path_len < 0 || static_cast<size_t>(path_len) >= sizeof(path))
+            {
+                _exit(1);
+            }
+
+            // O_CLOEXEC: don't leak the fd into later children.
+            int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+            if (fd < 0)
+            {
+                static constexpr char err[] = "UE4SS: Failed to write crash report\n";
+                ssize_t wr = write(STDERR_FILENO, err, sizeof(err) - 1);
+                (void)wr;
+                _exit(1);
+            }
+
+            static constexpr char header[] = "=== UE4SS Crash Report ===\n";
+            ssize_t wr = write(fd, header, sizeof(header) - 1);
             (void)wr;
 
             const char* sig_name = sig == SIGSEGV ? "SIGSEGV" : sig == SIGABRT ? "SIGABRT" : sig == SIGFPE ? "SIGFPE" : sig == SIGILL ? "SIGILL" : "UNKNOWN";
@@ -128,26 +160,24 @@ namespace RC
             wr = write(fd, sig_buf, sig_len);
             (void)wr;
 
-            // Backtrace
+            // backtrace_symbols_fd is glibc-documented safe in signal handlers (writes
+            // directly to fd, no malloc).
             void* bt_buffer[64];
             int bt_size = backtrace(bt_buffer, 64);
-            const char* bt_header = "\nBacktrace:\n";
-            wr = write(fd, bt_header, strlen(bt_header));
+            static constexpr char bt_header[] = "\nBacktrace:\n";
+            wr = write(fd, bt_header, sizeof(bt_header) - 1);
             (void)wr;
             backtrace_symbols_fd(bt_buffer, bt_size, fd);
 
             close(fd);
-
-            UE4SS_DBG( "UE4SS: Crash report written to: %s\n", crash_path_utf8.c_str());
-        }
-        else
-        {
-            UE4SS_DBG( "UE4SS: Failed to write crash report\n");
+            _exit(0);
         }
 
-        // Re-raise the signal to get default behavior (core dump etc)
+        // Parent (or fork failed): re-raise the signal to get default behavior
+        // (core dump etc). kill() is POSIX async-signal-safe (raise() is not).
+        // With fork() the game thread is already safe; without it, best effort only.
         signal(sig, SIG_DFL);
-        raise(sig);
+        kill(getpid(), sig);
     }
 #endif // __linux__
 
@@ -180,6 +210,19 @@ namespace RC
         sa.sa_handler = linux_crash_handler;
         sigemptyset(&sa.sa_mask);
         sa.sa_flags = SA_RESTART;
+
+        // Capture the crash output directory BEFORE installing the handlers: a crash
+        // between sigaction() and the capture would otherwise enter the handler with
+        // a partially-assigned s_crash_dir (and allocation is fine before the handler
+        // is live).
+        try
+        {
+            s_crash_dir = to_string(StringType{UE4SSProgram::get_program().get_working_directory()});
+        }
+        catch (...)
+        {
+            s_crash_dir = ".";
+        }
 
         sigaction(SIGSEGV, &sa, nullptr);
         sigaction(SIGABRT, &sa, nullptr);
