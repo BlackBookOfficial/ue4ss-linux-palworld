@@ -1385,8 +1385,11 @@ namespace RC::Unreal::UnrealInitializer
             return;
         }
 #endif
-        // We're assuming that KismetStringLibrary, KismetStringLibrary.Conv_NameToString, and the KismetStringLibrary CDO exists.
-        // We will lock here forever if that's not the case.
+        // We assume the KSL class (KismetSystemLibrary or its UE4-era name
+        // KismetStringLibrary), its Conv_NameToString function, and its CDO
+        // exist. The lookup below tries both library names (UE5 renamed the
+        // class; Palworld is UE 5.1), and Conv_NameToString has a fallback
+        // path. We will lock here forever if none of them exist.
         // Consider adding a limit to how long we can wait.
         Output::send(STR("Locating KismetSystemLibrary...\n"));
         UClass* KismetStringLibrary{};
@@ -1400,7 +1403,7 @@ namespace RC::Unreal::UnrealInitializer
             auto wait_start = std::chrono::steady_clock::now();
             while (!KismetStringLibrary)
             {
-                KismetStringLibrary = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings({STR("/Script/Engine"), STR("KismetStringLibrary")}));
+                KismetStringLibrary = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalNoToStringFromStrings({STR("/Script/Engine"), STR("KismetSystemLibrary")}));
 #ifdef __linux__
                 Output::send(STR("KSL lookup: result={}\n"), (void*)KismetStringLibrary);
 #endif
@@ -1408,7 +1411,7 @@ namespace RC::Unreal::UnrealInitializer
                 {
                     if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - wait_start).count() > 30)
                     {
-                        Output::send<LogLevel::Warning>(STR("Timeout locating KismetStringLibrary. FName::ToString via Conv_NameToString will not be available.\n"));
+                        Output::send<LogLevel::Warning>(STR("Timeout locating KismetSystemLibrary. FName::ToString via Conv_NameToString will not be available.\n"));
                         break;
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));

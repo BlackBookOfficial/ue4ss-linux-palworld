@@ -174,29 +174,6 @@ namespace RC::Unreal::UObjectGlobals
                 else
                 {
                     auto NextOuter = PathObject->GetOuterPrivate();
-                    // Validate the outer pointer before following it.
-                    if (NextOuter)
-                    {
-                        const auto OuterAddr = reinterpret_cast<uintptr_t>(NextOuter);
-                        if (OuterAddr < 0x7e0000000000 || OuterAddr > 0x7fffffffffff)
-                        {
-                            NextOuter = nullptr;
-                        }
-#ifdef __linux__
-                        // Safe probe: verify the outer object's vtable is readable before following.
-                        // This catches stale pointers to freed-but-still-mapped objects.
-                        else
-                        {
-                            uint64_t probe;
-                            struct iovec liov = {&probe, 8};
-                            struct iovec riov = {reinterpret_cast<void*>(OuterAddr), 8};
-                            if (process_vm_readv(getpid(), &liov, 1, &riov, 1, 0) != 8)
-                            {
-                                NextOuter = nullptr;
-                            }
-                        }
-#endif
-                    }
                     PathObject = NextOuter;
                     ++NumPathParts;
                 }
@@ -763,10 +740,15 @@ namespace RC::Unreal::UObjectGlobals
                     Object = ObjectItem->GetUObject();
                     if (!Object) { return; }
                     if (ObjectItem->IsUnreachable()) { return; }
-                    uintptr_t obj_addr = reinterpret_cast<uintptr_t>(Object);
-                    if (obj_addr < 0x7e0000000000 || obj_addr > 0x7fffffffffff) { return; }
-                    int32_t item_flags = *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(ObjectItem) + 0x8);
-                    if (item_flags == 0) { return; }
+// NOTE (PR #4 + PR #10): the original Linux port added TWO over-filters
+                    // that amputated the live-world portion of the UObject array:
+                    //   - the hardcoded 0x7e-0x7f address range (rejects every object on
+                    //     this non-PIE binary, whose heap maps at 0x73-0x7c)
+                    //   - the EInternalObjectFlags==0 filter (zero flags is the STEADY
+                    //     STATE for ordinary actors; only set during GC marking/rooting)
+                    // Freed slots are already handled by the null-Object check above and
+                    // the per-iteration ue4ss_with_iter_recovery wrapper handles stale
+                    // pointers. Neither filter is needed; remove both.
                     GUOBJECTARRAY_PROFILE_ITER_COUNT()
                     iter_action = Callable(Object, ChunkIndex, ItemIndex);
                 });
