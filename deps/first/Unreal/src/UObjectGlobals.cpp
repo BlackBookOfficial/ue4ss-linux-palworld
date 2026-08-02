@@ -174,29 +174,6 @@ namespace RC::Unreal::UObjectGlobals
                 else
                 {
                     auto NextOuter = PathObject->GetOuterPrivate();
-                    // Validate the outer pointer before following it.
-                    if (NextOuter)
-                    {
-                        const auto OuterAddr = reinterpret_cast<uintptr_t>(NextOuter);
-                        if (OuterAddr < 0x7e0000000000 || OuterAddr > 0x7fffffffffff)
-                        {
-                            NextOuter = nullptr;
-                        }
-#ifdef __linux__
-                        // Safe probe: verify the outer object's vtable is readable before following.
-                        // This catches stale pointers to freed-but-still-mapped objects.
-                        else
-                        {
-                            uint64_t probe;
-                            struct iovec liov = {&probe, 8};
-                            struct iovec riov = {reinterpret_cast<void*>(OuterAddr), 8};
-                            if (process_vm_readv(getpid(), &liov, 1, &riov, 1, 0) != 8)
-                            {
-                                NextOuter = nullptr;
-                            }
-                        }
-#endif
-                    }
                     PathObject = NextOuter;
                     ++NumPathParts;
                 }
@@ -763,8 +740,6 @@ namespace RC::Unreal::UObjectGlobals
                     Object = ObjectItem->GetUObject();
                     if (!Object) { return; }
                     if (ObjectItem->IsUnreachable()) { return; }
-                    uintptr_t obj_addr = reinterpret_cast<uintptr_t>(Object);
-                    if (obj_addr < 0x7e0000000000 || obj_addr > 0x7fffffffffff) { return; }
                     int32_t item_flags = *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(ObjectItem) + 0x8);
                     if (item_flags == 0) { return; }
                     GUOBJECTARRAY_PROFILE_ITER_COUNT()
