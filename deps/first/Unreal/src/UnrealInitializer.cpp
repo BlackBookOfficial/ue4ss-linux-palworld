@@ -1143,7 +1143,23 @@ namespace RC::Unreal::UnrealInitializer
                 FProperty::VTableLayoutMap[STR("EmitReferenceInfo")] = 0x160;
                 FProperty::VTableLayoutMap[STR("SameType")] = 0x168;
 
-                Output::send(STR("Palworld vtable override: +8 shift applied to all UObject-derived maps from 0x260, FProperty GetMinAlignment=0x150\n"));
+                // UEngine: the baked UE5.1 slot 0x2F0 is WRONG on this build —
+                // it resolves to UEngine::PostExit (28 bytes, cold, never called
+                // per-frame), so the EngineTick hook silently never fires and
+                // LoopInGameThreadWithDelay/ExecuteInGameThreadWithDelay never
+                // dispatch. Real UEngine::Tick is at 0x308 (delta +0x18 = 3
+                // slots). Verified via gdb (2026-08-01):
+                //   - FEngineLoop::Tick @ 0x43b54f5 does call *0x308(%rax) on the
+                //     GEngine vtable, preceded by the frame-time gate, followed
+                //     by the WorldList loop
+                //   - runtime stack sample: nanosleep <- Sleep <- 0xaa3d338
+                //     (inside Tick @ 0xaa3cfe0) <- 0x43b5505 (that call's return)
+                //   - vtable symbols: _ZTV14UPalGameEngine+792 == _ZTV7UEngine+792
+                //     == _ZTV11UGameEngine+792 == 0xaa3cfe0
+                //   - baked slot value: 0xaa3c2c0 = PostExit (28-byte fn)
+                UEngine::VTableLayoutMap[STR("Tick")] = 0x308;
+
+                Output::send(STR("Palworld vtable override: individually-verified offsets (UObject ProcessEvent=0x268, AActor BeginPlay=0x388 EndPlay=0x390, GameMode InitGameState=0x740, FProperty GetMinAlignment=0x150, UEngine Tick=0x308)\n"));
 
                 // Self-healing sweep: re-derive the AActor-region offsets from
                 // the binary by consensus over all AActor-family vtables, so a
