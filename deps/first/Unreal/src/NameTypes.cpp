@@ -282,18 +282,19 @@ namespace RC::Unreal
 
     const StringType ToStringInternalWrapper_UsingScan(const FName* name)
     {
-        // LEAK FIX (2026-08-03, pending RE verdict): the game's ToStringInternal
-        // appends into the fork-owned FStringOut. An empty FStringOut has zero
-        // capacity, so the FIRST append forces the game to allocate via its own
-        // TLS-cache allocator — and the fork's TStringBase dtor frees via
-        // SystemFree (glibc), which never returns the buffer to the game
-        // allocator (~300B leaked per call; measured 425MB/min under census).
+        // LEAK FIX (2026-08-03): the game's ToStringInternal appends into the
+        // fork-owned FStringOut. An empty FStringOut has zero capacity, so the
+        // FIRST append forces the game to allocate via its own TLS-cache
+        // allocator — and the fork's TStringBase dtor frees via SystemFree
+        // (glibc), which never returns the buffer to the game allocator
+        // (~300B leaked per call; measured 425MB/min under census).
         // Pre-reserving with the FORK's own allocator gives the game capacity to
         // append into, so it NEVER calls the game allocator; the fork dtor then
         // SystemFrees its own buffer — correct ownership, zero leak.
-        // FName max length is 1024 chars; reserve 2048 (wchar) to cover paths.
+        // NAME_SIZE is the FName max length (1024); +16 covers the numbered-name
+        // suffix the game appends ("_1234567890") plus the null terminator.
         FStringOut string{};
-        string.Reserve(2048);
+        string.Reset(NAME_SIZE + 16);
         FName::ToStringInternal(name, string);
 
         StringType name_string{*string ? *string : STR("UE4SS_None")};

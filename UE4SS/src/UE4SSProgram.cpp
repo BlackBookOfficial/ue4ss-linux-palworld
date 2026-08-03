@@ -1451,18 +1451,15 @@ namespace RC
 
                 // Override FName::ToString scan
                 // If a Lua signature script exists (UE4SS_Signatures/FName_ToString.lua),
-                // setup_lua_scan_overrides() already wired it into config — do not clobber
-                // it with the dlsym/AOB path (the Lua script is the authoritative address
-                // source for stripped binaries where dlsym fails and AOB is heuristic).
-                auto lua_fts_script = m_working_directory / STR("UE4SS_Signatures/FName_ToString.lua");
-                bool has_lua_fts_override = std::filesystem::exists(lua_fts_script);
-                if (has_lua_fts_override)
-                {
-                    UE4SS_DBG( "[UE4SS] FName::ToString: using Lua signature override (%s)\n", ensure_str(lua_fts_script).c_str());
-                }
-                else
-                {
-                    config.ScanOverrides.fname_to_string = [&](std::vector<SignatureContainer>&, Unreal::Signatures::ScanResult& scan_result) {
+                // setup_lua_scan_overrides() already wired it into config. Chain it with
+                // the dlsym/AOB fallback: run the Lua override first (it is the
+                // authoritative address source for stripped binaries where dlsym fails),
+                // and fall back to dlsym/AOB if it does not produce a ready function.
+                auto lua_fts_script = m_working_directory / "UE4SS_Signatures/FName_ToString.lua";
+                std::error_code lua_fts_ec{};
+                bool has_lua_fts_override = std::filesystem::exists(lua_fts_script, lua_fts_ec);
+
+                auto fts_dlsym_fallback = [&](std::vector<SignatureContainer>&, Unreal::Signatures::ScanResult& scan_result) {
                     void* addr = try_resolve("FName::ToString");
                     if (!addr) addr = try_resolve("_ZN5FName8ToStringEv");
                     // Try const variant
@@ -1578,7 +1575,27 @@ namespace RC
                     {
                         UE4SS_DBG( "[UE4SS] dlsym: FName::ToString not found (stripped binary?)\n");
                     }
-                    };
+                };
+
+                if (has_lua_fts_override)
+                {
+                    // Chain: Lua script first (authoritative for stripped binaries),
+                    // dlsym/AOB as fallback if the Lua scan did not produce a ready function.
+                    auto lua_fts_override = config.ScanOverrides.fname_to_string;
+                    config.ScanOverrides.fname_to_string =
+                            [lua_fts_override, fts_dlsym_fallback](std::vector<SignatureContainer>& signature_containers,
+                                                                   Unreal::Signatures::ScanResult& scan_result) {
+                                lua_fts_override(signature_containers, scan_result);
+                                if (!Unreal::FName::ToStringInternal.is_ready())
+                                {
+                                    UE4SS_DBG( "[UE4SS] FName::ToString: Lua override did not resolve, falling back to dlsym/AOB\n");
+                                    fts_dlsym_fallback(signature_containers, scan_result);
+                                }
+                            };
+                }
+                else
+                {
+                    config.ScanOverrides.fname_to_string = fts_dlsym_fallback;
                 }
 
                 // Override ProcessEvent scan
