@@ -1450,7 +1450,19 @@ namespace RC
                 };
 
                 // Override FName::ToString scan
-                config.ScanOverrides.fname_to_string = [&](std::vector<SignatureContainer>&, Unreal::Signatures::ScanResult& scan_result) {
+                // If a Lua signature script exists (UE4SS_Signatures/FName_ToString.lua),
+                // setup_lua_scan_overrides() already wired it into config — do not clobber
+                // it with the dlsym/AOB path (the Lua script is the authoritative address
+                // source for stripped binaries where dlsym fails and AOB is heuristic).
+                auto lua_fts_script = m_working_directory / STR("UE4SS_Signatures/FName_ToString.lua");
+                bool has_lua_fts_override = std::filesystem::exists(lua_fts_script);
+                if (has_lua_fts_override)
+                {
+                    UE4SS_DBG( "[UE4SS] FName::ToString: using Lua signature override (%s)\n", ensure_str(lua_fts_script).c_str());
+                }
+                else
+                {
+                    config.ScanOverrides.fname_to_string = [&](std::vector<SignatureContainer>&, Unreal::Signatures::ScanResult& scan_result) {
                     void* addr = try_resolve("FName::ToString");
                     if (!addr) addr = try_resolve("_ZN5FName8ToStringEv");
                     // Try const variant
@@ -1566,7 +1578,10 @@ namespace RC
                     {
                         UE4SS_DBG( "[UE4SS] dlsym: FName::ToString not found (stripped binary?)\n");
                     }
-                };
+                    };
+                }
+
+                // Override ProcessEvent scan
 
                 // Override ProcessEvent scan — needed for hooking UObject::ProcessEvent
                 // ProcessEvent is critical: all Blueprint function calls (give, tp, spawn, etc.) go through it
