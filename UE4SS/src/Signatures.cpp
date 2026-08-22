@@ -153,7 +153,32 @@ namespace RC
                         lua_fts_scan_script,
                         signature_containers,
                         [](void* address) {
-                            Output::send(STR("FName::ToString address: {} <- Lua Script\n"), address);
+                            // Prologue validation: FName::ToString(FString&) begins with a
+                            // fixed prologue (push rbp; push r15-r12; push rbx; sub rsp,0x808).
+                            // A hardcoded address that goes stale after a game update points
+                            // at unrelated code — assigning it makes every init call SIGSEGV.
+                            // Reject any address whose prologue doesn't match, so the
+                            // dlsym/AOB/Conv fallback chain takes over instead.
+                            static constexpr uint8_t expected_prologue[] = {
+                                    0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53,
+                                    0x48, 0x81, 0xEC, 0x08, 0x08, 0x00, 0x00
+                            };
+                            auto* probe = static_cast<uint8_t*>(address);
+                            bool prologue_matches = true;
+                            for (size_t i = 0; i < sizeof(expected_prologue); i++)
+                            {
+                                if (probe[i] != expected_prologue[i])
+                                {
+                                    prologue_matches = false;
+                                    break;
+                                }
+                            }
+                            if (!prologue_matches)
+                            {
+                                Output::send(STR("FName::ToString Lua override at {} rejected: prologue mismatch (stale address from a previous game build?)\n"), address);
+                                return DidLuaScanSucceed::No;
+                            }
+                            Output::send(STR("FName::ToString address: {} <- Lua Script (prologue verified)\n"), address);
                             Unreal::FName::ToStringInternal.assign_address(address);
                             return DidLuaScanSucceed::Yes;
                         },

@@ -1450,7 +1450,16 @@ namespace RC
                 };
 
                 // Override FName::ToString scan
-                config.ScanOverrides.fname_to_string = [&](std::vector<SignatureContainer>&, Unreal::Signatures::ScanResult& scan_result) {
+                // If a Lua signature script exists (UE4SS_Signatures/FName_ToString.lua),
+                // setup_lua_scan_overrides() already wired it into config. Chain it with
+                // the dlsym/AOB fallback: run the Lua override first (it is the
+                // authoritative address source for stripped binaries where dlsym fails),
+                // and fall back to dlsym/AOB if it does not produce a ready function.
+                auto lua_fts_script = m_working_directory / "UE4SS_Signatures/FName_ToString.lua";
+                std::error_code lua_fts_ec{};
+                bool has_lua_fts_override = std::filesystem::exists(lua_fts_script, lua_fts_ec);
+
+                auto fts_dlsym_fallback = [&](std::vector<SignatureContainer>&, Unreal::Signatures::ScanResult& scan_result) {
                     void* addr = try_resolve("FName::ToString");
                     if (!addr) addr = try_resolve("_ZN5FName8ToStringEv");
                     // Try const variant
@@ -1485,6 +1494,56 @@ namespace RC
                             return 0;
                         }, &exec_segments);
 
+                        // Strong AOB first: the full verified prologue + body header of
+                        // FName::ToString(FString&) (UE 5.1, Clang/LTO build):
+                        //   55                    push rbp
+                        //   41 57                 push r15
+                        //   41 56                 push r14
+                        //   41 55                 push r13
+                        //   41 54                 push r12
+                        //   53                    push rbx
+                        //   48 81 EC 08 08 00 00  sub rsp, 0x808
+                        //   49 89 F6              mov rsi, r14   (FString& Out)
+                        //   49 89 FF              mov rdi, r15   (const FName* this)
+                        //   8B 1F                 mov ebx, [rdi] (ComparisonIndex)
+                        // Verified unique (exactly 1 hit) on Steam buildid 24575149; the
+                        // prologue prefix matched the 24466863-era function too. This
+                        // self-resolves after game updates instead of depending on a
+                        // hardcoded Lua override address.
+                        const uint8_t strong_pattern[] = {
+                                0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53,
+                                0x48, 0x81, 0xEC, 0x08, 0x08, 0x00, 0x00, 0x49, 0x89, 0xF6,
+                                0x49, 0x89, 0xFF, 0x8B, 0x1F
+                        };
+                        const size_t strong_pattern_len = sizeof(strong_pattern);
+
+                        uint8_t* strong_found = nullptr;
+                        for (const auto& seg : exec_segments)
+                        {
+                            if (seg.size < strong_pattern_len) continue;
+                            for (size_t offset = 0; offset + strong_pattern_len <= seg.size; offset++)
+                            {
+                                if (memcmp(seg.start + offset, strong_pattern, strong_pattern_len) == 0)
+                                {
+                                    strong_found = seg.start + offset;
+                                    break;
+                                }
+                            }
+                            if (strong_found) break;
+                        }
+                        if (strong_found)
+                        {
+                            addr = strong_found;
+                            UE4SS_DBG("[UE4SS] AOB scan: FName::ToString resolved via strong signature at %p\n", addr);
+                        }
+                        else
+                        {
+                            UE4SS_DBG("[UE4SS] AOB scan: strong FName::ToString signature not found, trying legacy pattern\n");
+                        }
+
+                        if (!strong_found)
+                        {
+                        // Legacy weak pattern (kept as a last-resort scan)
                         // Pattern: mov ecx, [rcx+0x00]; ... call rel32
                         // FName::ToString reads the ComparisonIndex from the FName (offset 0x00)
                         // 8B 89 00 00 00 00    mov ecx, [rcx+0x0]
@@ -1556,6 +1615,7 @@ namespace RC
                             UE4SS_DBG("[UE4SS] AOB scan: FName::ToString not found. Using limited-mode fallback.\n");
                         }
                     }
+                    }
 
                     if (addr)
                     {
@@ -1567,6 +1627,29 @@ namespace RC
                         UE4SS_DBG( "[UE4SS] dlsym: FName::ToString not found (stripped binary?)\n");
                     }
                 };
+
+                if (has_lua_fts_override)
+                {
+                    // Chain: Lua script first (authoritative for stripped binaries),
+                    // dlsym/AOB as fallback if the Lua scan did not produce a ready function.
+                    auto lua_fts_override = config.ScanOverrides.fname_to_string;
+                    config.ScanOverrides.fname_to_string =
+                            [lua_fts_override, fts_dlsym_fallback](std::vector<SignatureContainer>& signature_containers,
+                                                                   Unreal::Signatures::ScanResult& scan_result) {
+                                lua_fts_override(signature_containers, scan_result);
+                                if (!Unreal::FName::ToStringInternal.is_ready())
+                                {
+                                    UE4SS_DBG( "[UE4SS] FName::ToString: Lua override did not resolve, falling back to dlsym/AOB\n");
+                                    fts_dlsym_fallback(signature_containers, scan_result);
+                                }
+                            };
+                }
+                else
+                {
+                    config.ScanOverrides.fname_to_string = fts_dlsym_fallback;
+                }
+
+                // Override ProcessEvent scan
 
                 // Override ProcessEvent scan — needed for hooking UObject::ProcessEvent
                 // ProcessEvent is critical: all Blueprint function calls (give, tp, spawn, etc.) go through it
