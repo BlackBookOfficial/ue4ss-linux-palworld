@@ -25,15 +25,16 @@ concurrency:
 jobs:
   build-and-release:
     name: Build and Publish Linux Release
-    # Build inside Debian 12 (bookworm) so the released .so targets
-    # glibc 2.36 and GLIBCXX_3.4.30. Building on Ubuntu 24.04 produces
-    # a .so that requires glibc 2.39, which won't run on Debian 12
-    # inference providers or older distros. The runner is still
-    # ubuntu-24.04 (GitHub-hosted); the container directive runs all
-    # steps inside the Debian 12 image.
+    # Build inside gcc:13 (its userland IS Debian 12 bookworm: glibc 2.36 /
+    # GLIBCXX 3.4.30) but with GCC 13, required because the code uses <format>
+    # (libstdc++ ships it only from GCC 13; a plain debian:12 image has GCC 12
+    # and fails to compile). With -static-libstdc++/-static-libgcc below, the .so
+    # needs only glibc >= 2.36 and carries its own C++ runtime, so it runs on
+    # stock Debian 12 / Ubuntu 22.04+ and any distro with glibc >= 2.36.
+    # (Building directly on ubuntu-24.04 would require glibc 2.39.)
     runs-on: ubuntu-24.04
     container:
-      image: debian:12
+      image: gcc:13
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -49,17 +50,17 @@ jobs:
         run: echo "TAG_NAME=${{ inputs.tag_name != '' && inputs.tag_name || github.ref_name }}" >> $GITHUB_ENV
 
       - name: Install dependencies
-        # Debian 12 package names. The release artifact targets
-        # glibc 2.36 and GLIBCXX 3.4.30 (GCC 12) so it runs on
-        # the widest range of host systems, including inference
-        # providers limited to those versions.
+        # The gcc:13 image already provides GCC 13 in /usr/local; do NOT
+        # apt-install gcc/g++ here or Debian bookworm's GCC 12 would shadow it
+        # and reintroduce the missing-<format> build failure. The release
+        # artifact needs only glibc >= 2.36 (libstdc++/libgcc linked statically).
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
             cmake ninja-build pkg-config git ca-certificates curl \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libgl-dev libegl-dev libgles-dev \
-            gcc g++ binutils zip xz-utils
+            binutils zip xz-utils
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -77,6 +78,8 @@ jobs:
             -DUE4SS_GUI_ENABLED=ON \
             -DUE4SS_INPUT_ENABLED=OFF \
             -DUE4SS_PROFILERS=OFF \
+            -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
             -Wno-dev
 
       - name: Build UE4SS (Development)
@@ -302,7 +305,7 @@ jobs:
             - GUI: Enabled (GLFW3/OpenGL3)
             - Input: Disabled
             - Profilers: Disabled
-            - Compiler: GCC 12 (Debian 12 bookworm)
+            - Compiler: GCC 13 (gcc:13 image = Debian 12 bookworm userland); libstdc++/libgcc statically linked
 
             ### Artifacts
             - `ue4ss-linux-palworld-<tag>.tar.gz` — Standard Unix archive, full drop-in: library, settings, Mods folder, config
@@ -317,7 +320,7 @@ jobs:
 
             ### Compatibility
             - Built on Debian 12 (bookworm), x86_64
-            - Minimum runtime: glibc 2.36, GLIBCXX 3.4.30 (GCC 12)
+            - Minimum runtime: glibc 2.36 (libstdc++/libgcc statically linked; no external GLIBCXX dependency)
             - Runs on: Debian 12+, Ubuntu 22.04+ (with backports), and any distro with glibc ≥ 2.36
             - Requires: libGL, libEGL, libX11, libXrandr, libXinerama, libXcursor, libXi
             - Engine Tick Hook: Auto-detected via dlsym (or manual override in UE4SS_Addresses.ini)
